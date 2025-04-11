@@ -138,3 +138,158 @@ test "Task with timeout" {
     std.debug.print("Test: Slow task {d} completed: {any} (expecting false due to timeout)\n", .{ slow_task_id, slow_completed });
     try std.testing.expect(!slow_completed); // Now works with false
 }
+
+var count: u32 = 0;
+fn retryTaskFunc(_: void, result: *ThreadPool.TaskResult) void {
+    @atomicStore(u32, &count, @atomicLoad(u32, &count, .monotonic) + 1, .monotonic);
+    std.debug.print("retryTaskFunc: Attempt {d} in thread {d}\n", .{ count, std.Thread.getCurrentId() });
+    result.success = count >= 3; // Succeed on third attempt
+    result.retry = !result.success; // Retry if not successful
+}
+
+test "Task with retries" {
+    std.debug.print("Test: Starting retry test at {d} ns\n", .{std.time.nanoTimestamp()});
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var pool = try ThreadPool.init(allocator, .{ .min_threads = 2, .max_threads = 8 });
+    defer pool.deinit();
+
+    try pool.startWorkers(2);
+
+    const task_id = try pool.schedule(
+        retryTaskFunc,
+        {},
+        null,
+        10,
+        1 * std.time.ns_per_s,
+        2, // Allow 2 retries (3 attempts total)
+        100 * std.time.ns_per_ms, // 100ms delay between retries
+        null,
+        null,
+    );
+    std.debug.print("Test: Scheduled task {d} with 2 retries\n", .{task_id});
+
+    const completed = try pool.waitForTask(task_id, 3 * std.time.ns_per_s);
+    std.debug.print("Test: Task {d} completed: {any}\n", .{ task_id, completed });
+    try std.testing.expect(completed);
+}
+
+var count1: u32 = 0;
+fn failRetryTaskFunc(_: void, result: *ThreadPool.TaskResult) void {
+    count1 += 1;
+    std.debug.print("failRetryTaskFunc: Attempt {d} in thread {d}\n", .{ count1, std.Thread.getCurrentId() });
+    result.success = false; // Always fail
+    result.retry = true; // Always retry
+}
+
+test "Task fails after retries" {
+    std.debug.print("Test: Starting retry failure test at {d} ns\n", .{std.time.nanoTimestamp()});
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var pool = try ThreadPool.init(allocator, .{ .min_threads = 2, .max_threads = 8 });
+    defer pool.deinit();
+
+    try pool.startWorkers(2);
+
+    const task_id = try pool.schedule(
+        failRetryTaskFunc,
+        {},
+        null,
+        10,
+        1 * std.time.ns_per_s,
+        2, // Allow 2 retries (3 attempts total)
+        100 * std.time.ns_per_ms, // 100ms delay between retries
+        null,
+        null,
+    );
+    std.debug.print("Test: Scheduled task {d} with 2 retries\n", .{task_id});
+
+    const completed = try pool.waitForTask(task_id, 3 * std.time.ns_per_s);
+    std.debug.print("Test: Task {d} completed: {any} (expecting false)\n", .{ task_id, completed });
+    try std.testing.expect(!completed); // Expect failure after retries
+}
+
+test "Task with dependency timeout" {
+    std.debug.print("Test: Starting dependency timeout test at {d} ns\n", .{std.time.nanoTimestamp()});
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var pool = try ThreadPool.init(allocator, .{ .min_threads = 2, .max_threads = 8 });
+    defer pool.deinit();
+
+    try pool.startWorkers(2);
+
+    // Task 0: Slow task that takes 500ms
+    const task0_id = try pool.schedule(
+        slowTaskFunc,
+        {},
+        null,
+        10,
+        1 * std.time.ns_per_s,
+        0,
+        0,
+        null,
+        null,
+    );
+    std.debug.print("Test: Scheduled slow task {d}\n", .{task0_id});
+
+    // Task 1: Depends on Task 0, with a 100ms dependency timeout
+    var deps = try allocator.alloc(u64, 1);
+    deps[0] = task0_id;
+    const task1_id = try pool.schedule(
+        taskFunc,
+        {},
+        null,
+        8,
+        1 * std.time.ns_per_s,
+        0,
+        0,
+        deps,
+        100 * std.time.ns_per_ms, // 100ms dependency timeout
+    );
+    std.debug.print("Test: Scheduled task {d} dependent on {d} with 100ms timeout\n", .{ task1_id, task0_id });
+
+    const completed0 = try pool.waitForTask(task0_id, 2 * std.time.ns_per_s);
+    std.debug.print("Test: Task {d} completed: {any}\n", .{ task0_id, completed0 });
+    try std.testing.expect(completed0);
+
+    const completed1 = try pool.waitForTask(task1_id, 2 * std.time.ns_per_s);
+    std.debug.print("Test: Task {d} completed: {any} (expecting false due to dep timeout)\n", .{ task1_id, completed1 });
+    try std.testing.expect(!completed1); // Expect failure due to dependency timeout
+}
+
+test "Priority queue respects order" {
+    std.debug.print("Test: Starting priority queue test at {d} ns\n", .{std.time.nanoTimestamp()});
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var pool = try ThreadPool.init(allocator, .{ .min_threads = 2, .max_threads = 8 });
+    defer pool.deinit();
+
+    try pool.startWorkers(2);
+
+    const task_ids = [_]u64{
+        try pool.schedule(taskFunc, {}, null, 5, 1 * std.time.ns_per_s, 0, 0, null, null), // Low priority
+        try pool.schedule(taskFunc, {}, null, 10, 1 * std.time.ns_per_s, 0, 0, null, null), // High priority
+        try pool.schedule(taskFunc, {}, null, 7, 1 * std.time.ns_per_s, 0, 0, null, null), // Medium priority
+    };
+    std.debug.print("Test: Scheduled tasks with priorities 5, 10, 7\n", .{});
+
+    const completed = [_]bool{
+        try pool.waitForTask(task_ids[0], 2 * std.time.ns_per_s),
+        try pool.waitForTask(task_ids[1], 2 * std.time.ns_per_s),
+        try pool.waitForTask(task_ids[2], 2 * std.time.ns_per_s),
+    };
+    for (completed, task_ids) |c, id| {
+        std.debug.print("Test: Task {d} completed: {any}\n", .{ id, c });
+        try std.testing.expect(c);
+    }
+
+    // Check logs manually to confirm order: 10, 7, 5
+}

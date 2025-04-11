@@ -120,7 +120,7 @@ pub const ThreadPool = struct {
             return task;
         }
 
-        fn deinit(self: *Task, allocator: std.mem.Allocator) void {
+        pub fn deinit(self: *Task, allocator: std.mem.Allocator) void {
             if (self.arg_deinit) |arg_deinit_fn| {
                 arg_deinit_fn(self.arg);
             }

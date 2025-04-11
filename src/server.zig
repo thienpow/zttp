@@ -1,5 +1,7 @@
 const std = @import("std");
 const logging = @import("logging.zig");
+const Request = @import("http/request.zig").Request;
+const Response = @import("http/response.zig").Response;
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
@@ -52,135 +54,6 @@ pub const Server = struct {
 
     /// Handler function type
     pub const Handler = *const fn (*Request, *Response) void;
-
-    /// HTTP Request structure
-    pub const Request = struct {
-        method: []const u8,
-        path: []const u8,
-        headers: std.StringHashMap([]const u8),
-        body: ?[]const u8,
-        allocator: std.mem.Allocator,
-
-        pub fn init(allocator: std.mem.Allocator) !Request {
-            return Request{
-                .method = "",
-                .path = "",
-                .headers = std.StringHashMap([]const u8).init(allocator),
-                .body = null,
-                .allocator = allocator,
-            };
-        }
-
-        pub fn deinit(self: *Request) void {
-            var header_it = self.headers.iterator();
-            while (header_it.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
-                self.allocator.free(entry.value_ptr.*);
-            }
-            self.headers.deinit();
-
-            if (self.method.len > 0) self.allocator.free(self.method);
-            if (self.path.len > 0) self.allocator.free(self.path);
-            if (self.body) |body| self.allocator.free(body);
-        }
-    };
-
-    /// HTTP Response structure
-    pub const Response = struct {
-        status: u16,
-        headers: std.StringHashMap([]const u8),
-        body: ?[]const u8,
-        allocator: std.mem.Allocator,
-
-        pub fn init(allocator: std.mem.Allocator) Response {
-            return Response{
-                .status = 200,
-                .headers = std.StringHashMap([]const u8).init(allocator),
-                .body = null,
-                .allocator = allocator,
-            };
-        }
-
-        pub fn deinit(self: *Response) void {
-            var header_it = self.headers.iterator();
-            while (header_it.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
-                self.allocator.free(entry.value_ptr.*);
-            }
-            self.headers.deinit();
-
-            if (self.body) |body| self.allocator.free(body);
-        }
-
-        pub fn setHeader(self: *Response, name: []const u8, value: []const u8) !void {
-            const name_dup = try self.allocator.dupe(u8, name);
-            errdefer self.allocator.free(name_dup);
-
-            const value_dup = try self.allocator.dupe(u8, value);
-            errdefer self.allocator.free(value_dup);
-
-            if (self.headers.get(name_dup)) |old_value| {
-                self.allocator.free(old_value);
-            }
-
-            try self.headers.put(name_dup, value_dup);
-        }
-
-        pub fn setBody(self: *Response, body: []const u8) !void {
-            if (self.body) |old_body| {
-                self.allocator.free(old_body);
-            }
-            self.body = try self.allocator.dupe(u8, body);
-        }
-
-        pub fn writeToStream(self: *Response, stream: std.net.Stream) !void {
-            var buffer = std.ArrayList(u8).init(self.allocator);
-            defer buffer.deinit();
-
-            // Status line
-            try buffer.writer().print("HTTP/1.1 {} OK\r\n", .{self.status});
-
-            // Headers
-            var content_type_set = false;
-            var content_length_set = false;
-
-            var header_it = self.headers.iterator();
-            while (header_it.next()) |entry| {
-                try buffer.writer().print("{s}: {s}\r\n", .{
-                    entry.key_ptr.*,
-                    entry.value_ptr.*,
-                });
-
-                if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, "Content-Type")) {
-                    content_type_set = true;
-                } else if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, "Content-Length")) {
-                    content_length_set = true;
-                }
-            }
-
-            // Add default headers if not set
-            if (!content_type_set) {
-                try buffer.writer().writeAll("Content-Type: text/plain\r\n");
-            }
-
-            if (!content_length_set and self.body != null) {
-                try buffer.writer().print("Content-Length: {d}\r\n", .{self.body.?.len});
-            } else if (!content_length_set) {
-                try buffer.writer().writeAll("Content-Length: 0\r\n");
-            }
-
-            // End of headers
-            try buffer.writer().writeAll("\r\n");
-
-            // Body
-            if (self.body) |body| {
-                try buffer.writer().writeAll(body);
-            }
-
-            // Send everything to the stream
-            try stream.writer().writeAll(buffer.items);
-        }
-    };
 
     /// Parse a raw HTTP request
     fn parseHttpRequest(allocator: std.mem.Allocator, buffer: []const u8) !Request {
@@ -317,7 +190,7 @@ pub const Server = struct {
 
             response.status = 400;
             try response.setBody("Bad Request");
-            try response.writeToStream(connection.stream);
+            try response.send(connection.stream);
             return;
         };
         defer request.deinit();

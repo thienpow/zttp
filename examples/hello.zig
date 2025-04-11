@@ -1,13 +1,15 @@
 const std = @import("std");
 const zttp = @import("zttp");
 const Server = zttp.Server;
+const Request = zttp.Request;
+const Response = zttp.Response;
 const ThreadPool = zttp.ThreadPool;
 
 // Global thread pool that will be used by handlers
 var global_pool: *ThreadPool = undefined;
 
 // Simple hello world handler function
-fn helloHandler(req: *Server.Request, res: *Server.Response) void {
+fn helloHandler(req: *Request, res: *Response) void {
     std.debug.print("Received request for path: {s}\n", .{req.path});
 
     res.setHeader("Content-Type", "text/html") catch |err| {
@@ -58,7 +60,7 @@ fn processingTask(data: AsyncTaskData, result: *ThreadPool.TaskResult) void {
 var request_counter = std.atomic.Value(u32).init(0);
 
 // Handler that schedules work on the thread pool
-fn asyncHandler(req: *Server.Request, res: *Server.Response) void {
+fn asyncHandler(req: *Request, res: *Response) void {
     _ = req; // Unused in this example
 
     // Generate a unique client ID

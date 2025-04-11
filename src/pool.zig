@@ -13,6 +13,7 @@ pub const ThreadPool = struct {
     max_threads: usize,
     max_tasks: usize,
     active_threads: std.atomic.Value(usize),
+    spawned_threads: usize, // Tracks number of spawned threads
     next_task_id: std.atomic.Value(u64),
     all_tasks: std.AutoHashMap(u64, TaskStatus),
     pending_tasks: std.AutoHashMap(u64, *Task),
@@ -167,22 +168,17 @@ pub const ThreadPool = struct {
     };
 
     fn compareTaskPriority(_: void, a: *ThreadPool.Task, b: *ThreadPool.Task) std.math.Order {
-        // Higher priority comes first (max-heap behavior)
         return std.math.order(b.priority, a.priority);
     }
 
     /// Initialize a new thread pool without starting threads
     pub fn init(allocator: Allocator, options: Options) !ThreadPool {
         std.debug.print("ThreadPool.init: Starting at {d} ns\n", .{std.time.nanoTimestamp()});
-        std.debug.print("ThreadPool.init: Allocating threads list\n", .{});
         const threads = try allocator.alloc(std.Thread, options.max_threads);
-        std.debug.print("ThreadPool.init: Allocating tasks list\n", .{});
         const tasks = std.PriorityQueue(*Task, void, compareTaskPriority).init(allocator, {});
-        std.debug.print("ThreadPool.init: Allocating hash maps\n", .{});
         const all_tasks = std.AutoHashMap(u64, TaskStatus).init(allocator);
         const pending_tasks = std.AutoHashMap(u64, *Task).init(allocator);
-        std.debug.print("ThreadPool.init: Creating ThreadPool struct\n", .{});
-        const pool = ThreadPool{
+        return ThreadPool{
             .allocator = allocator,
             .running = std.atomic.Value(bool).init(true),
             .threads = threads,
@@ -195,11 +191,10 @@ pub const ThreadPool = struct {
             .max_threads = options.max_threads,
             .max_tasks = options.max_tasks,
             .active_threads = std.atomic.Value(usize).init(0),
+            .spawned_threads = 0,
             .next_task_id = std.atomic.Value(u64).init(0),
             .options = options,
         };
-        std.debug.print("ThreadPool.init: Completed at {d} ns\n", .{std.time.nanoTimestamp()});
-        return pool;
     }
 
     /// Start worker threads after initialization
@@ -210,34 +205,56 @@ pub const ThreadPool = struct {
         while (i < count) : (i += 1) {
             std.debug.print("ThreadPool.startWorkers: Spawning thread {d}/{d}\n", .{ i + 1, count });
             const thread = try std.Thread.spawn(.{}, workerLoop, .{self});
-            std.debug.print("ThreadPool.startWorkers: Spawned thread {d} with handle {d}\n", .{ i + 1, thread.getHandle() });
-            self.threads[i] = thread; // Direct assignment to slice
+            self.threads[i] = thread;
         }
+        self.spawned_threads = count;
         std.debug.print("ThreadPool.startWorkers: Completed\n", .{});
     }
 
     /// Clean up all resources associated with the thread pool
     pub fn deinit(self: *ThreadPool) void {
         std.debug.print("ThreadPool.deinit() started at {d} ns\n", .{std.time.nanoTimestamp()});
+
         self.running.store(false, .monotonic);
         self.cond.broadcast();
-        for (self.threads[0..self.active_threads.load(.monotonic)]) |thread| {
+
+        while (self.active_threads.load(.monotonic) > 0) {
+            std.debug.print("ThreadPool.deinit: Waiting for {d} active threads\n", .{self.active_threads.load(.monotonic)});
+            std.time.sleep(10 * std.time.ns_per_ms);
+        }
+
+        for (self.threads[0..self.spawned_threads]) |thread| {
+            std.debug.print("ThreadPool.deinit: Joining thread {d}\n", .{thread.getHandle()});
             thread.join();
         }
-        while (self.tasks.count() > 0) { // Clear remaining tasks
+
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        while (self.tasks.count() > 0) {
             const task = self.tasks.remove();
-            _ = self.all_tasks.put(task.id, .Failed) catch {};
+            std.debug.print("ThreadPool.deinit: Cleaning task {d}, ptr: {*}\n", .{ task.id, task });
+            self.all_tasks.put(task.id, .Failed) catch |err| {
+                std.debug.print("ThreadPool.deinit: Failed to update task {d} status: {}\n", .{ task.id, err });
+            };
             task.deinit(self.allocator);
         }
-        var it = self.pending_tasks.iterator();
-        while (it.next()) |entry| {
-            _ = self.all_tasks.put(entry.key_ptr.*, .Failed) catch {};
-            entry.value_ptr.*.deinit(self.allocator);
+
+        var pending_it = self.pending_tasks.iterator();
+        while (pending_it.next()) |entry| {
+            const task = entry.value_ptr.*;
+            std.debug.print("ThreadPool.deinit: Cleaning pending task {d}, ptr: {*}\n", .{ entry.key_ptr.*, task });
+            self.all_tasks.put(entry.key_ptr.*, .Failed) catch |err| {
+                std.debug.print("ThreadPool.deinit: Failed to update pending task {d} status: {}\n", .{ entry.key_ptr.*, err });
+            };
+            task.deinit(self.allocator);
         }
+
         self.pending_tasks.deinit();
         self.all_tasks.deinit();
-        self.tasks.deinit(); // Free PriorityQueue internal memory
+        self.tasks.deinit();
         self.allocator.free(self.threads);
+
         std.debug.print("ThreadPool.deinit() completed at {d} ns\n", .{std.time.nanoTimestamp()});
     }
 
@@ -255,7 +272,7 @@ pub const ThreadPool = struct {
 
     /// Process tasks whose dependencies are now met
     fn checkDependentsLocked(self: *ThreadPool, completed_task_id: u64) void {
-        _ = completed_task_id; // Explicitly mark as unused for now; could be used later for optimization
+        _ = completed_task_id;
 
         var dependents_to_move = std.ArrayList(*ThreadPool.Task).init(self.allocator);
         defer dependents_to_move.deinit();
@@ -272,7 +289,7 @@ pub const ThreadPool = struct {
                     std.debug.print("checkDependentsLocked: Task {d} dependency timeout expired (elapsed: {d} ns, timeout: {d} ns)\n", .{
                         task.id, now - task.queued_at, dep_timeout,
                     });
-                    tasks_to_fail.append(task.id) catch { // Fixed from task_id to task.id
+                    tasks_to_fail.append(task.id) catch {
                         std.debug.print("checkDependentsLocked: Failed to append task {d} to fail list\n", .{task.id});
                     };
                     continue;
@@ -285,14 +302,12 @@ pub const ThreadPool = struct {
                     };
                 }
             } else {
-                // No dependencies; should not be in pending_tasks, but handle gracefully
                 dependents_to_move.append(task) catch {
                     std.debug.print("checkDependentsLocked: Failed to append task {d} to dependents list (no deps)\n", .{task.id});
                 };
             }
         }
 
-        // Fail tasks with expired dependency timeouts
         for (tasks_to_fail.items) |task_id| {
             if (self.pending_tasks.getPtr(task_id)) |task_ptr| {
                 const task = task_ptr.*;
@@ -300,18 +315,18 @@ pub const ThreadPool = struct {
                 self.all_tasks.put(task_id, .Failed) catch {
                     std.debug.print("checkDependentsLocked: Failed to update status for task {d}\n", .{task_id});
                 };
-                task.deinit(self.allocator);
+                std.debug.print("checkDependentsLocked: Task {d} marked as Failed, ptr: {*}\n", .{ task_id, task });
+                task.deinit(self.allocator); // Free the task here
             }
         }
 
-        // Move tasks whose dependencies are met
         for (dependents_to_move.items) |task| {
             if (self.pending_tasks.remove(task.id)) {
                 self.tasks.add(task) catch |err| {
                     std.debug.print("checkDependentsLocked: Failed to add task {d} to tasks: {}\n", .{ task.id, err });
                     _ = self.all_tasks.put(task.id, .Failed) catch {};
                     task.deinit(self.allocator);
-                    continue; // Skip signaling if add fails
+                    continue;
                 };
                 self.cond.signal();
                 std.debug.print("checkDependentsLocked: Task {d} dependencies met, moved to tasks\n", .{task.id});
@@ -370,7 +385,7 @@ pub const ThreadPool = struct {
             try self.all_tasks.put(task_id, .Pending);
             if (self.areDependenciesMetLocked(task.dependencies.?)) {
                 try self.all_tasks.put(task_id, .Running);
-                try self.tasks.add(task); // Fixed from append
+                try self.tasks.add(task);
                 std.debug.print("Schedule: Task {d} dependencies met, added to tasks\n", .{task_id});
                 self.cond.signal();
             } else {
@@ -379,7 +394,7 @@ pub const ThreadPool = struct {
             }
         } else {
             try self.all_tasks.put(task_id, .Running);
-            try self.tasks.add(task); // Fixed from append
+            try self.tasks.add(task);
             std.debug.print("Schedule: Task {d} added to tasks\n", .{task_id});
             self.cond.signal();
         }
@@ -407,11 +422,11 @@ pub const ThreadPool = struct {
             if (status_opt) |status| {
                 return switch (status) {
                     .Completed => true,
-                    .Failed => false, // Changed from error.TaskFailed to false
+                    .Failed => false,
                     .Running, .Pending => {
                         if (timeout_ns) |timeout| {
                             if (std.time.nanoTimestamp() - start > timeout) {
-                                return false; // Wait timeout exceeded
+                                return false;
                             }
                         }
                         std.time.sleep(10 * std.time.ns_per_ms);
@@ -422,7 +437,7 @@ pub const ThreadPool = struct {
                 return error.TaskNotFound;
             }
         }
-        return false; // Pool shut down
+        return false;
     }
 
     /// Cancel a task by ID
@@ -438,7 +453,6 @@ pub const ThreadPool = struct {
             return;
         }
 
-        // Cannot cancel running tasks in PriorityQueue efficiently without iteration
         if (self.all_tasks.get(task_id)) |status| {
             switch (status) {
                 .Completed, .Failed => return Error.TaskAlreadyFinished,
@@ -476,7 +490,6 @@ pub const ThreadPool = struct {
                 break;
             }
 
-            // Check for tasks with expired dependency timeouts
             var tasks_to_fail = std.ArrayList(u64).init(self.allocator);
             defer tasks_to_fail.deinit();
             var pending_it = self.pending_tasks.iterator();
@@ -496,7 +509,6 @@ pub const ThreadPool = struct {
                 }
             }
 
-            // Fail tasks with expired dependency timeouts
             for (tasks_to_fail.items) |task_id| {
                 if (self.pending_tasks.getPtr(task_id)) |task_ptr| {
                     const task = task_ptr.*;
@@ -504,7 +516,8 @@ pub const ThreadPool = struct {
                     self.all_tasks.put(task_id, .Failed) catch {
                         std.debug.print("workerLoop: Thread {d} failed to update status for task {d}\n", .{ thread_id, task_id });
                     };
-                    task.deinit(self.allocator);
+                    std.debug.print("workerLoop: Thread {d} marked task {d} as Failed, ptr: {*}\n", .{ thread_id, task_id, task });
+                    task.deinit(self.allocator); // Free the task here
                 }
             }
 
@@ -520,10 +533,9 @@ pub const ThreadPool = struct {
                         current_task.?.deinit(self.allocator);
                     } else if (task.timeout_ns) |timeout| {
                         if (now - task.queued_at > timeout) {
-                            std.debug.print("workerLoop: Thread {d} removing timed out task {d}\n", .{ thread_id, task.id });
+                            std.debug.print("workerLoop: Thread {d} marking task {d} as timed out\n", .{ thread_id, task.id });
                             current_task = self.tasks.remove();
                             _ = self.all_tasks.put(current_task.?.id, .Failed) catch {};
-                            current_task.?.deinit(self.allocator);
                         } else {
                             current_task = self.tasks.remove();
                             std.debug.print("workerLoop: Thread {d} selected task {d} with priority {d}\n", .{ thread_id, current_task.?.id, current_task.?.priority });
@@ -536,7 +548,8 @@ pub const ThreadPool = struct {
             } else if (self.tasks.count() > self.max_tasks) {
                 std.debug.print("workerLoop: Thread {d} invalid task count {d}, resetting\n", .{ thread_id, self.tasks.count() });
                 while (self.tasks.count() > 0) {
-                    const task = self.tasks.remove(); // Guaranteed non-null
+                    const task = self.tasks.remove();
+                    _ = self.all_tasks.put(task.id, .Failed) catch {};
                     task.deinit(self.allocator);
                 }
             }
@@ -574,9 +587,7 @@ pub const ThreadPool = struct {
                     self.tasks.add(task) catch {
                         std.debug.print("workerLoop: Thread {d} task {d} failed to requeue (OutOfMemory), marking as Failed\n", .{ thread_id, task.id });
                         status = .Failed;
-                        self.all_tasks.put(task.id, status) catch {
-                            std.debug.print("workerLoop: Thread {d} failed to update status for task {d}\n", .{ thread_id, task.id });
-                        };
+                        self.all_tasks.put(task.id, status) catch {};
                         self.checkDependentsLocked(task.id);
                         task.deinit(self.allocator);
                         self.mutex.unlock();
@@ -584,9 +595,8 @@ pub const ThreadPool = struct {
                     };
                     self.all_tasks.put(task.id, .Running) catch {
                         std.debug.print("workerLoop: Thread {d} task {d} failed to update status (OutOfMemory), marking as Failed\n", .{ thread_id, task.id });
-                        // Remove the task we just added if status update fails
                         if (self.tasks.count() > 0) {
-                            const removed_task = self.tasks.remove(); // Safe since we just added it
+                            const removed_task = self.tasks.remove();
                             removed_task.deinit(self.allocator);
                         }
                         status = .Failed;
@@ -599,11 +609,13 @@ pub const ThreadPool = struct {
                     self.cond.signal();
                     std.debug.print("workerLoop: Thread {d} task {d} requeued for retry\n", .{ thread_id, task.id });
                 } else {
-                    status = if (result.success and (task.timeout_ns == null or elapsed <= task.timeout_ns.?))
+                    status = if (self.all_tasks.get(task.id) == .Failed)
+                        .Failed
+                    else if (result.success and (task.timeout_ns == null or elapsed <= task.timeout_ns.?))
                         .Completed
                     else
                         .Failed;
-                    if (status == .Failed) {
+                    if (status == .Failed and self.all_tasks.get(task.id) != .Failed) {
                         std.debug.print("workerLoop: Thread {d} task {d} failed due to timeout (elapsed: {d} ns, timeout: {d} ns) or no success\n", .{
                             thread_id, task.id, elapsed, task.timeout_ns orelse 0,
                         });

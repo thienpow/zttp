@@ -1,13 +1,21 @@
+/// src/server.zig
 const std = @import("std");
-const http = @import("http.zig");
+const Context = @import("context.zig").Context;
+const Request = @import("request.zig").Request;
+const Response = @import("response.zig").Response;
+const StatusCode = @import("response.zig").StatusCode;
 const ThreadPool = @import("pool.zig").ThreadPool;
+const HandlerFn = @import("router.zig").HandlerFn;
+const MiddlewareFn = @import("router.zig").MiddlewareFn;
+const NextFn = @import("router.zig").NextFn;
+const Router = @import("router.zig").Router;
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
     listener: ?std.net.Server,
     port: u16,
     running: bool,
-    router: http.Router,
+    router: Router,
     pool: *ThreadPool,
 
     pub fn init(allocator: std.mem.Allocator, port: u16, pool: *ThreadPool) Server {
@@ -16,7 +24,7 @@ pub const Server = struct {
             .listener = null,
             .port = port,
             .running = false,
-            .router = http.Router.init(allocator),
+            .router = Router.init(allocator),
             .pool = pool,
         };
     }
@@ -28,11 +36,11 @@ pub const Server = struct {
         self.router.deinit();
     }
 
-    pub fn route(self: *Server, method: []const u8, path: []const u8, handler: http.HandlerFn) !void {
+    pub fn route(self: *Server, method: []const u8, path: []const u8, handler: HandlerFn) !void {
         try self.router.add(method, path, handler);
     }
 
-    pub fn use(self: *Server, middleware: http.MiddlewareFn) !void {
+    pub fn use(self: *Server, middleware: MiddlewareFn) !void {
         try self.router.use(middleware);
     }
 
@@ -87,14 +95,14 @@ pub const Server = struct {
             return;
         }
 
-        var req = http.Request.parse(alloc, buffer[0..bytes_read]) catch |err| {
+        var req = Request.parse(alloc, buffer[0..bytes_read]) catch |err| {
             std.log.err("Failed to parse request: {}", .{err});
             sendError(task.conn.stream, alloc, .bad_request, "Invalid Request");
             result.success = false;
             return;
         };
-        var res = http.Response.init(alloc);
-        var ctx = http.Context.init(alloc);
+        var res = Response.init(alloc);
+        var ctx = Context.init(alloc);
 
         res.setHeader("Server", "zig-http/0.1") catch {
             sendError(task.conn.stream, alloc, .internal_server_error, "Server Error");
@@ -139,7 +147,7 @@ pub const Server = struct {
             };
             callNext(&req, &res, &ctx);
         } else {
-            const handler = task.server.router.find(req.method, req.path) orelse notFound;
+            const handler = task.server.router.find(req.method, req.path, &ctx) orelse notFound;
             handler(&req, &res, &ctx);
         }
 
@@ -153,12 +161,12 @@ pub const Server = struct {
     }
 
     const MiddlewareContext = struct {
-        middlewares: []const http.MiddlewareFn,
+        middlewares: []const MiddlewareFn,
         index: usize,
         server: *Server,
     };
 
-    fn callNext(req: *http.Request, res: *http.Response, ctx: *http.Context) void {
+    fn callNext(req: *Request, res: *Response, ctx: *Context) void {
         const context_addr = ctx.get("middleware_context") orelse {
             std.log.err("Middleware context not found", .{});
             return;
@@ -174,13 +182,13 @@ pub const Server = struct {
             context_ptr.index += 1;
             mw(req, res, ctx, &callNext);
         } else {
-            const handler = context_ptr.server.router.find(req.method, req.path) orelse notFound;
+            const handler = context_ptr.server.router.find(req.method, req.path, ctx) orelse notFound;
             handler(req, res, ctx);
         }
     }
 
-    fn sendError(stream: std.net.Stream, alloc: std.mem.Allocator, status: http.StatusCode, msg: []const u8) void {
-        var res = http.Response.init(alloc);
+    fn sendError(stream: std.net.Stream, alloc: std.mem.Allocator, status: StatusCode, msg: []const u8) void {
+        var res = Response.init(alloc);
         defer res.deinit();
         res.status = status;
         res.setBody(msg) catch return;
@@ -188,7 +196,7 @@ pub const Server = struct {
         res.send(stream) catch return;
     }
 
-    fn notFound(_: *http.Request, res: *http.Response, _: *http.Context) void {
+    fn notFound(_: *Request, res: *Response, _: *Context) void {
         res.status = .not_found;
         res.setBody("Not Found") catch return;
         res.setHeader("Content-Type", "text/plain") catch return;

@@ -146,11 +146,21 @@ fn bundleMiddleware(req: *Request, res: *Response, ctx: *Context, next: *const f
     next(req, res, ctx);
 }
 
+fn userHandler(_: *Request, res: *Response, ctx: *Context) void {
+    res.status = .ok;
+    const user_id = ctx.get("id") orelse "unknown";
+    const message = std.fmt.allocPrint(res.allocator, "User ID: {s}", .{user_id}) catch "Error";
+    res.setBody(message) catch return;
+    res.setHeader("Content-Type", "text/plain") catch return;
+    std.log.info("Served user endpoint with id: {s}", .{user_id});
+}
+
 fn setupRoutes(server: *Server) !void {
     try server.use(loggingMiddleware);
     try server.route("GET", "/", hello);
     try server.route("GET", "/json", jsonEndpoint);
     try server.route("GET", "/async", asyncEndpoint);
+    try server.route("GET", "/users/:id", userHandler); // New route
 }
 
 pub fn main() !void {

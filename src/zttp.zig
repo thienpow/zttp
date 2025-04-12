@@ -1,9 +1,13 @@
 const std = @import("std");
 pub const Server = @import("server.zig").Server;
 pub const ThreadPool = @import("pool.zig").ThreadPool;
-pub const Request = @import("http.zig").Request;
-pub const Response = @import("http.zig").Response;
-pub const Context = @import("http.zig").Context;
+pub const Request = @import("request.zig").Request;
+pub const Response = @import("response.zig").Response;
+pub const Context = @import("context.zig").Context;
+pub const MiddlewareFn = @import("router.zig").MiddlewareFn;
+pub const HandlerFn = @import("router.zig").HandlerFn;
+pub const NextFn = @import("router.zig").NextFn;
+pub const Router = @import("router.zig").Router;
 
 pub const ServerOptions = struct {
     port: u16 = 8080,
@@ -77,11 +81,11 @@ pub const ServerBundle = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn route(self: *ServerBundle, method: []const u8, path: []const u8, handler: fn (*Request, *Response, *Context) void) !void {
+    pub fn route(self: *ServerBundle, method: []const u8, path: []const u8, handler: HandlerFn) !void {
         try self.server.route(method, path, handler);
     }
 
-    pub fn use(self: *ServerBundle, middleware: fn (*Request, *Response, *Context, *const fn (*Request, *Response, *Context) void) void) !void {
+    pub fn use(self: *ServerBundle, middleware: MiddlewareFn) !void {
         try self.server.use(middleware);
     }
 };

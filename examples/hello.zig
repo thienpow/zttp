@@ -1,12 +1,13 @@
 const std = @import("std");
 const zttp = @import("zttp");
 const Server = zttp.Server;
-const ThreadPool = zttp.ThreadPool;
 const Request = zttp.Request;
 const Response = zttp.Response;
+const ServerOptions = zttp.ServerOptions;
 
-// Global ThreadPool, initialized in main
-var pool: ?ThreadPool = null;
+// Store the server bundle as a global variable
+// This avoids needing to modify Request to add a context field
+var server_bundle: ?*zttp.ServerBundle = null;
 
 fn hello(_: *Request, res: *Response) void {
     res.status = .ok;
@@ -37,10 +38,10 @@ fn jsonEndpoint(req: *Request, res: *Response) void {
 const AsyncTask = struct {
     allocator: std.mem.Allocator,
     delay_ms: u64,
-    task_id: u64 = 0, // Store task ID for waiting
 
-    fn process(self: AsyncTask, result: *ThreadPool.TaskResult) void {
+    fn process(self: AsyncTask, result: *zttp.ThreadPool.TaskResult) void {
         std.time.sleep(self.delay_ms * std.time.ns_per_ms);
+
         const msg = std.fmt.allocPrint(
             self.allocator,
             "Async task completed after {d}ms",
@@ -49,32 +50,27 @@ const AsyncTask = struct {
             result.success = false;
             return;
         };
+
         result.payload = @constCast(msg.ptr);
         result.payload_size = msg.len;
         result.success = true;
     }
-
-    fn deinit(self: AsyncTask, result: *ThreadPool.TaskResult) void {
-        if (result.payload != null and result.payload_size > 0) {
-            const ptr: [*]u8 = @ptrCast(result.payload.?);
-            self.allocator.free(ptr[0..result.payload_size]);
-        }
-    }
 };
 
 fn asyncEndpoint(_: *Request, res: *Response) void {
-    if (pool == null) {
+    if (server_bundle == null) {
         res.status = .internal_server_error;
-        res.setBody("Thread pool not initialized") catch return;
-        std.log.err("Thread pool not initialized", .{});
+        res.setBody("Server bundle not initialized") catch return;
+        std.log.err("Server bundle not initialized", .{});
         return;
     }
 
-    var task = AsyncTask{
+    const task = AsyncTask{
         .allocator = res.allocator,
         .delay_ms = 1000,
     };
-    const task_id = pool.?.schedule(
+
+    const task_id = server_bundle.?.pool.schedule(
         AsyncTask.process,
         task,
         null,
@@ -90,19 +86,16 @@ fn asyncEndpoint(_: *Request, res: *Response) void {
         std.log.err("Failed to schedule async task: {}", .{err});
         return;
     };
-    task.task_id = task_id;
+
     std.log.info("Scheduled async task ID: {d}", .{task_id});
 
     // Wait for task completion
-    const success = pool.?.waitForTask(task_id, 2 * std.time.ns_per_s) catch |err| {
+    const success = server_bundle.?.pool.waitForTask(task_id, 2 * std.time.ns_per_s) catch |err| {
         res.status = .internal_server_error;
         res.setBody("Failed to wait for task") catch return;
         std.log.err("Failed to wait for async task {d}: {}", .{ task_id, err });
         return;
     };
-
-    var result = ThreadPool.TaskResult{};
-    defer task.deinit(&result);
 
     if (!success) {
         res.status = .internal_server_error;
@@ -111,9 +104,10 @@ fn asyncEndpoint(_: *Request, res: *Response) void {
         return;
     }
 
-    if (result.payload != null and result.payload_size > 0) {
-        const msg: []const u8 = @as([*]const u8, @ptrCast(result.payload.?))[0..result.payload_size];
-        res.setBody(msg) catch return;
+    const status = server_bundle.?.pool.getTaskStatus(task_id);
+    if (status != null and status.? == .Completed) {
+        const message = "Async task completed successfully!";
+        res.setBody(message) catch return;
         res.status = .ok;
         res.setHeader("Content-Type", "text/plain") catch return;
         std.log.info("Async task {d} completed successfully", .{task_id});
@@ -124,27 +118,33 @@ fn asyncEndpoint(_: *Request, res: *Response) void {
     }
 }
 
+// Setup routes for the server
+fn setupRoutes(server: *Server) !void {
+    try server.route("/", hello);
+    try server.route("/json", jsonEndpoint);
+    try server.route("/async", asyncEndpoint);
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Initialize global pool
-    pool = try ThreadPool.init(allocator, .{
+    // Create server with the new integrated API
+    const options = ServerOptions{
+        .port = 8080,
         .min_threads = 2,
         .max_threads = 8,
         .max_tasks = 100,
-    });
-    defer if (pool) |*p| p.deinit();
-    try pool.?.startWorkers(2);
+    };
 
-    var server = Server.init(allocator, 8080, &pool.?);
-    defer server.deinit();
+    var bundle = try zttp.createServer(allocator, options, setupRoutes);
+    defer bundle.deinit();
 
-    try server.route("/", hello);
-    try server.route("/json", jsonEndpoint);
-    try server.route("/async", asyncEndpoint);
+    // Store the bundle in the global variable
+    server_bundle = bundle;
+    defer server_bundle = null;
 
     std.log.info("Starting server on :8080", .{});
-    try server.start();
+    try bundle.start(false); // Run in the main thread
 }

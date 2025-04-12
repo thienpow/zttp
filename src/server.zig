@@ -1,218 +1,137 @@
 const std = @import("std");
-const logging = @import("logging.zig");
-const Request = @import("http/request.zig").Request;
-const Response = @import("http/response.zig").Response;
+const http = @import("http.zig");
+const ThreadPool = @import("pool.zig").ThreadPool;
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
-    server: ?std.net.Server,
+    listener: ?std.net.Server,
     port: u16,
     running: bool,
-    routes: RouteMap,
+    router: http.Router,
+    pool: *ThreadPool,
 
-    /// Route storage that doesn't use hash map of function pointers
-    const RouteMap = struct {
-        const Route = struct {
-            path: []const u8,
-            handler: Handler,
-        };
-
-        routes: std.ArrayList(Route),
-        allocator: std.mem.Allocator,
-
-        pub fn init(allocator: std.mem.Allocator) RouteMap {
-            return RouteMap{
-                .routes = std.ArrayList(Route).init(allocator),
-                .allocator = allocator,
-            };
-        }
-
-        pub fn deinit(self: *RouteMap) void {
-            for (self.routes.items) |route| {
-                self.allocator.free(route.path);
-            }
-            self.routes.deinit();
-        }
-
-        pub fn add(self: *RouteMap, path: []const u8, handler: Handler) !void {
-            const path_dup = try self.allocator.dupe(u8, path);
-            try self.routes.append(Route{
-                .path = path_dup,
-                .handler = handler,
-            });
-        }
-
-        pub fn find(self: *RouteMap, path: []const u8) ?Handler {
-            for (self.routes.items) |route| {
-                if (std.mem.eql(u8, route.path, path)) {
-                    return route.handler;
-                }
-            }
-            return null;
-        }
-    };
-
-    /// Handler function type
-    pub const Handler = *const fn (*Request, *Response) void;
-
-    /// Parse a raw HTTP request
-    fn parseHttpRequest(allocator: std.mem.Allocator, buffer: []const u8) !Request {
-        var request = try Request.init(allocator);
-        errdefer request.deinit();
-
-        // Split the request into lines
-        var lines = std.mem.splitSequence(u8, buffer, "\r\n");
-
-        // Parse request line (first line)
-        const request_line = lines.next() orelse return error.InvalidRequest;
-        var parts = std.mem.splitScalar(u8, request_line, ' ');
-
-        const method = parts.next() orelse return error.InvalidRequest;
-        request.method = try allocator.dupe(u8, method);
-
-        const path = parts.next() orelse return error.InvalidRequest;
-        request.path = try allocator.dupe(u8, path);
-
-        // Skip protocol version for simplicity
-
-        // Parse headers
-        while (lines.next()) |line| {
-            if (line.len == 0) break; // Empty line separates headers from body
-
-            const colon_pos = std.mem.indexOf(u8, line, ":") orelse continue;
-            const name = std.mem.trim(u8, line[0..colon_pos], " ");
-            const value = std.mem.trim(u8, line[colon_pos + 1 ..], " ");
-
-            const name_dup = try allocator.dupe(u8, name);
-            errdefer allocator.free(name_dup);
-
-            const value_dup = try allocator.dupe(u8, value);
-            errdefer allocator.free(value_dup);
-
-            try request.headers.put(name_dup, value_dup);
-        }
-
-        // Simple body handling (will be incomplete for some requests)
-        const body_start = std.mem.indexOf(u8, buffer, "\r\n\r\n");
-        if (body_start) |pos| {
-            if (pos + 4 < buffer.len) {
-                request.body = try allocator.dupe(u8, buffer[pos + 4 ..]);
-            }
-        }
-
-        return request;
-    }
-
-    /// Initialize a new server with the given port
-    pub fn init(allocator: std.mem.Allocator, port: u16) Server {
-        return Server{
+    pub fn init(allocator: std.mem.Allocator, port: u16, pool: *ThreadPool) Server {
+        return .{
             .allocator = allocator,
-            .server = null,
+            .listener = null,
             .port = port,
             .running = false,
-            .routes = RouteMap.init(allocator),
+            .router = http.Router.init(allocator),
+            .pool = pool,
         };
     }
 
-    /// Clean up resources
     pub fn deinit(self: *Server) void {
-        if (self.server) |*server| {
-            server.deinit();
+        if (self.listener) |*listener| {
+            listener.deinit();
         }
-        self.routes.deinit();
+        self.router.deinit();
     }
 
-    /// Add a route to the server
-    pub fn addRoute(self: *Server, path: []const u8, handler: Handler) !void {
-        try self.routes.add(path, handler);
+    pub fn route(self: *Server, path: []const u8, handler: http.HandlerFn) !void {
+        try self.router.add(path, handler);
     }
 
-    /// Default handler for routes that aren't found
-    fn notFoundHandler(_: *Request, res: *Response) void {
-        res.status = 404;
-        res.setBody("Not Found") catch {};
-    }
-
-    /// Find a handler for the given path
-    fn findHandler(self: *Server, path: []const u8) Handler {
-        return self.routes.find(path) orelse &notFoundHandler;
-    }
-
-    /// Start the server
     pub fn start(self: *Server) !void {
         if (self.running) return error.AlreadyRunning;
 
-        // Create address
         const address = try std.net.Address.parseIp("0.0.0.0", self.port);
-
-        // In your version of Zig, the listen function is on Address, not Server
-        const server = try address.listen(.{
-            .reuse_address = true,
-        });
-
-        self.server = server;
+        self.listener = try address.listen(.{ .reuse_address = true });
         self.running = true;
 
-        std.debug.print("Server listening on 0.0.0.0:{d}\n", .{self.port});
+        std.log.info("Server listening on 0.0.0.0:{d}", .{self.port});
 
-        // Accept and handle connections
         while (self.running) {
-            const connection = self.server.?.accept() catch |err| {
-                std.debug.print("Error accepting connection: {}\n", .{err});
+            const conn = self.listener.?.accept() catch |err| {
+                std.log.err("Failed to accept connection: {}", .{err});
                 continue;
             };
-
-            // Handle the connection
-            self.handleConnection(connection) catch |err| {
-                std.debug.print("Error handling connection: {}\n", .{err});
-                connection.stream.close();
-            };
+            const task_id = try self.pool.schedule(
+                handleConnection,
+                ConnectionTask{ .server = self, .conn = conn },
+                null,
+                5,
+                null,
+                0,
+                0,
+                null,
+                null,
+            );
+            std.log.debug("Scheduled connection handling task: {d}", .{task_id});
         }
     }
 
-    /// Handle a client connection
-    fn handleConnection(self: *Server, connection: std.net.Server.Connection) !void {
-        defer connection.stream.close();
+    const ConnectionTask = struct {
+        server: *Server,
+        conn: std.net.Server.Connection,
+    };
 
-        // Read the request
-        var buffer: [4096]u8 = undefined;
-        const bytes_read = try connection.stream.read(&buffer);
+    fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) void {
+        defer task.conn.stream.close();
+        var arena = std.heap.ArenaAllocator.init(task.server.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
 
-        if (bytes_read == 0) return; // Client closed connection
-
-        // Parse the request
-        var request = parseHttpRequest(self.allocator, buffer[0..bytes_read]) catch |err| {
-            std.debug.print("Error parsing request: {}\n", .{err});
-
-            // Send error response
-            var response = Response.init(self.allocator);
-            defer response.deinit();
-
-            response.status = 400;
-            try response.setBody("Bad Request");
-            try response.send(connection.stream);
+        var buffer: [16384]u8 = undefined;
+        const bytes_read = task.conn.stream.read(&buffer) catch |err| {
+            std.log.err("Failed to read request: {}", .{err});
+            result.success = false;
             return;
         };
-        defer request.deinit();
+        if (bytes_read == 0) {
+            result.success = true;
+            return;
+        }
 
-        // Create response object
-        var response = Response.init(self.allocator);
-        defer response.deinit();
+        var req = http.Request.parse(alloc, buffer[0..bytes_read]) catch |err| {
+            std.log.err("Failed to parse request: {}", .{err});
+            sendError(task.conn.stream, alloc, .bad_request, "Invalid Request");
+            result.success = false;
+            return;
+        };
+        var res = http.Response.init(alloc);
 
-        // Set basic headers
-        try response.setHeader("Server", "zttp/0.1.0");
-        try response.setHeader("Connection", "close");
+        res.setHeader("Server", "zig-http/0.1") catch {
+            sendError(task.conn.stream, alloc, .internal_server_error, "Server Error");
+            result.success = false;
+            return;
+        };
 
-        // Find and call the appropriate handler
-        const handler = self.findHandler(request.path);
-        handler(&request, &response);
+        const keep_alive = req.isKeepAlive();
+        if (keep_alive) {
+            res.setHeader("Connection", "keep-alive") catch {};
+        } else {
+            res.setHeader("Connection", "close") catch {};
+        }
 
-        // Send the response
-        try response.writeToStream(connection.stream);
+        const handler = task.server.router.find(req.path) orelse notFound;
+        handler(&req, &res);
+
+        res.send(task.conn.stream) catch |err| {
+            std.log.err("Failed to send response: {}", .{err});
+            result.success = false;
+            return;
+        };
+
+        result.success = true;
+    }
+
+    fn sendError(stream: std.net.Stream, alloc: std.mem.Allocator, status: http.StatusCode, msg: []const u8) void {
+        var res = http.Response.init(alloc);
+        defer res.deinit();
+        res.status = status;
+        res.setBody(msg) catch return;
+        res.setHeader("Content-Type", "text/plain") catch return;
+        res.send(stream) catch return;
+    }
+
+    fn notFound(_: *http.Request, res: *http.Response) void {
+        res.status = .not_found;
+        res.body = "Not Found";
+        res.setHeader("Content-Type", "text/plain") catch return;
     }
 };
 
-/// Initialize a server with the given port
-pub fn initServer(allocator: std.mem.Allocator, port: u16) Server {
-    return Server.init(allocator, port);
+pub fn initServer(allocator: std.mem.Allocator, port: u16, pool: *ThreadPool) Server {
+    return Server.init(allocator, port, pool);
 }

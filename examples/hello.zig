@@ -130,6 +130,25 @@ fn asyncEndpoint(_: *Request, res: *Response, ctx: *Context) void {
     }
 }
 
+fn userHandler(_: *Request, res: *Response, ctx: *Context) void {
+    res.status = .ok;
+    const user_id = ctx.get("id") orelse "unknown";
+    const message = std.fmt.allocPrint(res.allocator, "User ID: {s}", .{user_id}) catch "Error";
+    res.setBody(message) catch return;
+    res.setHeader("Content-Type", "text/plain") catch return;
+    std.log.info("Served user endpoint with id: {s}", .{user_id});
+}
+
+fn postHandler(_: *Request, res: *Response, ctx: *Context) void {
+    res.status = .ok;
+    const user_id = ctx.get("id") orelse "unknown";
+    const post_id = ctx.get("post_id") orelse "unknown";
+    const message = std.fmt.allocPrint(res.allocator, "User ID: {s}, Post ID: {s}", .{ user_id, post_id }) catch "Error";
+    res.setBody(message) catch return;
+    res.setHeader("Content-Type", "text/plain") catch return;
+    std.log.info("Served post endpoint with user: {s}, post: {s}", .{ user_id, post_id });
+}
+
 fn loggingMiddleware(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Request, *Response, *Context) void) void {
     const request_id = std.fmt.allocPrint(ctx.allocator, "{d}", .{std.time.nanoTimestamp()}) catch "unknown";
     ctx.set("request_id", request_id) catch return;
@@ -146,21 +165,14 @@ fn bundleMiddleware(req: *Request, res: *Response, ctx: *Context, next: *const f
     next(req, res, ctx);
 }
 
-fn userHandler(_: *Request, res: *Response, ctx: *Context) void {
-    res.status = .ok;
-    const user_id = ctx.get("id") orelse "unknown";
-    const message = std.fmt.allocPrint(res.allocator, "User ID: {s}", .{user_id}) catch "Error";
-    res.setBody(message) catch return;
-    res.setHeader("Content-Type", "text/plain") catch return;
-    std.log.info("Served user endpoint with id: {s}", .{user_id});
-}
-
 fn setupRoutes(server: *Server) !void {
     try server.use(loggingMiddleware);
+    try server.use(bundleMiddleware);
     try server.route("GET", "/", hello);
     try server.route("GET", "/json", jsonEndpoint);
     try server.route("GET", "/async", asyncEndpoint);
-    try server.route("GET", "/users/:id", userHandler); // New route
+    try server.route("GET", "/users/:id", userHandler);
+    try server.route("GET", "/users/:id/posts/:post_id", postHandler);
 }
 
 pub fn main() !void {
@@ -183,8 +195,6 @@ pub fn main() !void {
 
     bundle_ptr_static = bundle_ptr;
     defer bundle_ptr_static = null;
-
-    try bundle.use(bundleMiddleware);
 
     std.log.info("Starting server on :8080", .{});
     try bundle.start(false);

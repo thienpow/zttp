@@ -66,7 +66,7 @@ pub const Router = struct {
             .handler = handler,
             .method = method_owned,
             .is_parametrized = is_parametrized,
-            .param_names = try param_names.toOwnedSlice(), // Use try to handle error
+            .param_names = try param_names.toOwnedSlice(),
         });
     }
 
@@ -90,8 +90,11 @@ pub const Router = struct {
                 var param_index: usize = 0;
                 var match = true;
 
+                std.log.debug("Matching route {s} against path {s}", .{ route.path, path });
+
                 while (route_segments.next()) |route_seg| {
                     const path_seg = path_segments.next() orelse {
+                        std.log.debug("Path too short for route {s}", .{route.path});
                         match = false;
                         break;
                     };
@@ -105,22 +108,25 @@ pub const Router = struct {
                             // Store parameter in Context
                             const param_name = route.param_names[param_index];
                             const param_value = ctx.allocator.dupe(u8, path_seg) catch {
-                                // Allocation failed, treat as no match
+                                std.log.err("Failed to allocate param value for {s}", .{param_name});
                                 match = false;
                                 break;
                             };
                             ctx.set(param_name, param_value) catch {
-                                // Setting context failed, free value and treat as no match
+                                std.log.err("Failed to set param {s}", .{param_name});
                                 ctx.allocator.free(param_value);
                                 match = false;
                                 break;
                             };
+                            std.log.debug("Set param {s} = {s}", .{ param_name, param_value });
                             param_index += 1;
                         } else {
+                            std.log.debug("Too many params for route {s}", .{route.path});
                             match = false;
                             break;
                         }
                     } else if (!std.mem.eql(u8, route_seg, path_seg)) {
+                        std.log.debug("Segment mismatch: {s} != {s}", .{ route_seg, path_seg });
                         match = false;
                         break;
                     }
@@ -128,10 +134,18 @@ pub const Router = struct {
 
                 // Ensure no extra path segments
                 if (path_segments.next() != null) {
+                    std.log.debug("Path too long for route {s}", .{route.path});
+                    match = false;
+                }
+
+                // Check if all parameters were set
+                if (match and param_index != route.param_names.len) {
+                    std.log.debug("Not enough params for route {s}, got {d}, expected {d}", .{ route.path, param_index, route.param_names.len });
                     match = false;
                 }
 
                 if (match) {
+                    std.log.debug("Route {s} matched", .{route.path});
                     return route.handler;
                 }
                 // Clear any parameters if no match
@@ -145,6 +159,7 @@ pub const Router = struct {
                 }
             }
         }
+        std.log.debug("No route matched for {s} {s}", .{ method, path });
         return null;
     }
 

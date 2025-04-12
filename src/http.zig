@@ -1,19 +1,57 @@
 const std = @import("std");
 
-pub const HandlerFn = *const fn (*Request, *Response) void;
+pub const HandlerFn = *const fn (*Request, *Response, *Context) void;
+pub const MiddlewareFn = *const fn (*Request, *Response, *Context, NextFn) void;
+pub const NextFn = *const fn (*Request, *Response, *Context) void;
+
+pub const Context = struct {
+    allocator: std.mem.Allocator,
+    data: std.StringHashMap([]const u8),
+
+    pub fn init(allocator: std.mem.Allocator) Context {
+        return .{
+            .allocator = allocator,
+            .data = std.StringHashMap([]const u8).init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *Context) void {
+        var it = self.data.iterator();
+        while (it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.data.deinit();
+    }
+
+    pub fn set(self: *Context, key: []const u8, value: []const u8) !void {
+        if (self.data.get(key)) |old| self.allocator.free(old);
+        try self.data.put(
+            try self.allocator.dupe(u8, key),
+            try self.allocator.dupe(u8, value),
+        );
+    }
+
+    pub fn get(self: *Context, key: []const u8) ?[]const u8 {
+        return self.data.get(key);
+    }
+};
 
 pub const Router = struct {
     routes: std.ArrayList(Route),
+    middlewares: std.ArrayList(MiddlewareFn),
     allocator: std.mem.Allocator,
 
     const Route = struct {
         path: []const u8,
         handler: HandlerFn,
+        method: []const u8,
     };
 
     pub fn init(allocator: std.mem.Allocator) Router {
         return .{
             .routes = std.ArrayList(Route).init(allocator),
+            .middlewares = std.ArrayList(MiddlewareFn).init(allocator),
             .allocator = allocator,
         };
     }
@@ -21,26 +59,39 @@ pub const Router = struct {
     pub fn deinit(self: *Router) void {
         for (self.routes.items) |route| {
             self.allocator.free(route.path);
+            self.allocator.free(route.method);
         }
         self.routes.deinit();
+        self.middlewares.deinit();
     }
 
-    pub fn add(self: *Router, path: []const u8, handler: HandlerFn) !void {
+    pub fn add(self: *Router, method: []const u8, path: []const u8, handler: HandlerFn) !void {
         if (path.len == 0 or path[0] != '/') return error.InvalidPath;
+        if (!isValidMethod(method)) return error.InvalidMethod;
         const path_owned = try self.allocator.dupe(u8, path);
+        const method_owned = try self.allocator.dupe(u8, method);
         try self.routes.append(.{
             .path = path_owned,
             .handler = handler,
+            .method = method_owned,
         });
     }
 
-    pub fn find(self: *Router, path: []const u8) ?HandlerFn {
+    pub fn use(self: *Router, middleware: MiddlewareFn) !void {
+        try self.middlewares.append(middleware);
+    }
+
+    pub fn find(self: *Router, method: []const u8, path: []const u8) ?HandlerFn {
         for (self.routes.items) |route| {
-            if (std.mem.eql(u8, route.path, path)) {
+            if (std.mem.eql(u8, route.method, method) and std.mem.eql(u8, route.path, path)) {
                 return route.handler;
             }
         }
         return null;
+    }
+
+    pub fn getMiddlewares(self: *Router) []const MiddlewareFn {
+        return self.middlewares.items;
     }
 };
 
@@ -52,9 +103,19 @@ pub const Request = struct {
     headers: std.StringHashMap([]const u8),
     query: std.StringHashMap([]const u8),
     body: ?[]const u8,
+    json: ?std.json.Value,
+    form: ?std.StringHashMap([]const u8),
+    multipart: ?std.ArrayList(MultipartPart),
+
+    pub const MultipartPart = struct {
+        name: []const u8,
+        filename: ?[]const u8,
+        content_type: []const u8,
+        data: []const u8,
+    };
 
     pub fn parse(allocator: std.mem.Allocator, data: []const u8) !Request {
-        if (data.len > 16384) return error.RequestTooLarge;
+        if (data.len > 65536) return error.RequestTooLarge;
         var req = Request{
             .allocator = allocator,
             .method = "",
@@ -63,6 +124,9 @@ pub const Request = struct {
             .headers = std.StringHashMap([]const u8).init(allocator),
             .query = std.StringHashMap([]const u8).init(allocator),
             .body = null,
+            .json = null,
+            .form = null,
+            .multipart = null,
         };
 
         var lines = std.mem.splitSequence(u8, data, "\r\n");
@@ -102,11 +166,13 @@ pub const Request = struct {
                     const len = try std.fmt.parseInt(usize, len_str, 10);
                     if (body_data.len >= len) {
                         req.body = try allocator.dupe(u8, body_data[0..len]);
+                        try parseBody(&req);
                     } else {
                         return error.IncompleteBody;
                     }
                 } else {
                     req.body = try allocator.dupe(u8, body_data);
+                    try parseBody(&req);
                 }
             }
         }
@@ -131,6 +197,26 @@ pub const Request = struct {
         }
         self.query.deinit();
         if (self.body) |b| self.allocator.free(b);
+        if (self.form) |*form| {
+            var fit = form.iterator();
+            while (fit.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            form.deinit();
+        }
+        if (self.multipart) |*mp| {
+            for (mp.items) |part| {
+                self.allocator.free(part.name);
+                if (part.filename) |f| self.allocator.free(f);
+                self.allocator.free(part.content_type);
+                self.allocator.free(part.data);
+            }
+            mp.deinit();
+        }
+        if (self.json) |json| {
+            json.deinit();
+        }
     }
 
     pub fn isKeepAlive(self: *Request) bool {
@@ -166,12 +252,80 @@ pub const Request = struct {
         return .{ .path = try allocator.dupe(u8, raw_path), .query = query };
     }
 
-    fn isValidMethod(method: []const u8) bool {
-        const valid = [_][]const u8{ "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH" };
-        for (valid) |m| {
-            if (std.mem.eql(u8, method, m)) return true;
+    fn parseBody(self: *Request) !void {
+        if (self.body == null or self.body.?.len == 0) return;
+        if (self.headers.get("Content-Type")) |ct| {
+            if (std.mem.startsWith(u8, ct, "application/json")) {
+                const parsed = std.json.parseFromSlice(
+                    std.json.Value,
+                    self.allocator,
+                    self.body.?,
+                    .{ .allocate = .alloc_always },
+                ) catch return;
+                self.json = parsed.value;
+            } else if (std.mem.startsWith(u8, ct, "application/x-www-form-urlencoded")) {
+                self.form = std.StringHashMap([]const u8).init(self.allocator);
+                var pairs = std.mem.splitScalar(u8, self.body.?, '&');
+                while (pairs.next()) |pair| {
+                    if (pair.len == 0) continue;
+                    const eq = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
+                    const key = try self.allocator.dupe(u8, pair[0..eq]);
+                    const value = try self.allocator.dupe(u8, pair[eq + 1 ..]);
+                    try self.form.?.put(key, value);
+                }
+            } else if (std.mem.startsWith(u8, ct, "multipart/form-data")) {
+                if (std.mem.indexOf(u8, ct, "boundary=")) |b| {
+                    const boundary = ct[b + 9 ..];
+                    self.multipart = try parseMultipart(self.allocator, self.body.?, boundary);
+                }
+            }
         }
-        return false;
+    }
+
+    fn parseMultipart(allocator: std.mem.Allocator, body: []const u8, boundary: []const u8) !std.ArrayList(MultipartPart) {
+        var parts = std.ArrayList(MultipartPart).init(allocator);
+        const boundary_marker = try std.fmt.allocPrint(allocator, "--{s}", .{boundary});
+        defer allocator.free(boundary_marker);
+        var sections = std.mem.splitSequence(u8, body, boundary_marker);
+        _ = sections.next(); // Skip first boundary
+        while (sections.next()) |section| {
+            if (section.len == 0 or std.mem.startsWith(u8, section, "--")) continue;
+            var part = MultipartPart{
+                .name = "",
+                .filename = null,
+                .content_type = "application/octet-stream",
+                .data = "",
+            };
+            var lines = std.mem.splitSequence(u8, section, "\r\n");
+            var headers_done = false;
+            while (lines.next()) |line| {
+                if (line.len == 0) {
+                    headers_done = true;
+                    continue;
+                }
+                if (!headers_done) {
+                    if (std.mem.startsWith(u8, line, "Content-Disposition:")) {
+                        if (std.mem.indexOf(u8, line, "name=\"")) |n| {
+                            const start = n + 6;
+                            const end = std.mem.indexOfScalar(u8, line[start..], '"') orelse return error.InvalidMultipart;
+                            part.name = try allocator.dupe(u8, line[start .. start + end]);
+                        }
+                        if (std.mem.indexOf(u8, line, "filename=\"")) |f| {
+                            const start = f + 10;
+                            const end = std.mem.indexOfScalar(u8, line[start..], '"') orelse return error.InvalidMultipart;
+                            part.filename = try allocator.dupe(u8, line[start .. start + end]);
+                        }
+                    } else if (std.mem.startsWith(u8, line, "Content-Type:")) {
+                        part.content_type = try allocator.dupe(u8, std.mem.trim(u8, line[13..], " "));
+                    }
+                } else {
+                    part.data = try allocator.dupe(u8, line);
+                    break; // Only take first line of data for simplicity
+                }
+            }
+            try parts.append(part);
+        }
+        return parts;
     }
 };
 
@@ -211,6 +365,15 @@ pub const Response = struct {
     pub fn setBody(self: *Response, body: []const u8) !void {
         if (self.body) |b| self.allocator.free(b);
         self.body = try self.allocator.dupe(u8, body);
+    }
+
+    pub fn setJson(self: *Response, value: anytype) !void {
+        if (self.body) |b| self.allocator.free(b);
+        var buffer = std.ArrayList(u8).init(self.allocator);
+        defer buffer.deinit();
+        try std.json.stringify(value, .{}, buffer.writer());
+        self.body = try self.allocator.dupe(u8, buffer.items);
+        try self.setHeader("Content-Type", "application/json");
     }
 
     pub fn send(self: *Response, stream: std.net.Stream) !void {
@@ -255,22 +418,38 @@ pub const Response = struct {
 pub const StatusCode = enum(u16) {
     ok = 200,
     created = 201,
+    accepted = 202,
     no_content = 204,
     bad_request = 400,
+    unauthorized = 401,
+    forbidden = 403,
     not_found = 404,
+    method_not_allowed = 405,
     internal_server_error = 500,
 
     pub fn reason(self: StatusCode) []const u8 {
         return switch (self) {
             .ok => "OK",
             .created => "Created",
+            .accepted => "Accepted",
             .no_content => "No Content",
             .bad_request => "Bad Request",
+            .unauthorized => "Unauthorized",
+            .forbidden => "Forbidden",
             .not_found => "Not Found",
+            .method_not_allowed => "Method Not Allowed",
             .internal_server_error => "Internal Server Error",
         };
     }
 };
+
+fn isValidMethod(method: []const u8) bool {
+    const valid = [_][]const u8{ "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "TRACE", "CONNECT" };
+    for (valid) |m| {
+        if (std.mem.eql(u8, method, m)) return true;
+    }
+    return false;
+}
 
 fn getHttpDate(allocator: std.mem.Allocator) ![]const u8 {
     const timestamp = std.time.timestamp();
@@ -282,11 +461,9 @@ fn getHttpDate(allocator: std.mem.Allocator) ![]const u8 {
     const minutes = seconds.getMinutesIntoHour();
     const secs = seconds.getSecondsIntoMinute();
 
-    // Calculate day of week (0=Sunday, 6=Saturday)
     const days_since_epoch = day.day;
-    const day_of_week = @mod(days_since_epoch + 4, 7); // Adjust for Jan 1, 1970 (Thursday)
+    const day_of_week = @mod(days_since_epoch + 4, 7);
 
-    // Calculate month and day of month
     const year = year_day.year;
     var day_of_year = year_day.day;
     const is_leap = year % 4 == 0 and (year % 100 != 0 or year % 400 == 0);
@@ -296,7 +473,7 @@ fn getHttpDate(allocator: std.mem.Allocator) ![]const u8 {
     for (month_lengths, 0..) |len, m| {
         if (day_of_year < len) {
             month = @intCast(m);
-            day_of_month = @as(u8, @intCast(day_of_year)) + 1; // 1-based
+            day_of_month = @as(u8, @intCast(day_of_year)) + 1;
             break;
         }
         day_of_year -= len;

@@ -28,8 +28,12 @@ pub const Server = struct {
         self.router.deinit();
     }
 
-    pub fn route(self: *Server, path: []const u8, handler: http.HandlerFn) !void {
-        try self.router.add(path, handler);
+    pub fn route(self: *Server, method: []const u8, path: []const u8, handler: http.HandlerFn) !void {
+        try self.router.add(method, path, handler);
+    }
+
+    pub fn use(self: *Server, middleware: http.MiddlewareFn) !void {
+        try self.router.use(middleware);
     }
 
     pub fn start(self: *Server) !void {
@@ -72,7 +76,7 @@ pub const Server = struct {
         defer arena.deinit();
         const alloc = arena.allocator();
 
-        var buffer: [16384]u8 = undefined;
+        var buffer: [65536]u8 = undefined;
         const bytes_read = task.conn.stream.read(&buffer) catch |err| {
             std.log.err("Failed to read request: {}", .{err});
             result.success = false;
@@ -90,6 +94,7 @@ pub const Server = struct {
             return;
         };
         var res = http.Response.init(alloc);
+        var ctx = http.Context.init(alloc);
 
         res.setHeader("Server", "zig-http/0.1") catch {
             sendError(task.conn.stream, alloc, .internal_server_error, "Server Error");
@@ -104,8 +109,39 @@ pub const Server = struct {
             res.setHeader("Connection", "close") catch {};
         }
 
-        const handler = task.server.router.find(req.path) orelse notFound;
-        handler(&req, &res);
+        const middlewares = task.server.router.getMiddlewares();
+        if (middlewares.len > 0) {
+            // Store MiddlewareContext in ctx
+            const middleware_context = MiddlewareContext{
+                .middlewares = middlewares,
+                .index = 0,
+                .server = task.server,
+            };
+            const context_ptr = alloc.create(MiddlewareContext) catch |err| {
+                std.log.err("Failed to allocate MiddlewareContext: {}", .{err});
+                sendError(task.conn.stream, alloc, .internal_server_error, "Server Error");
+                result.success = false;
+                return;
+            };
+            context_ptr.* = middleware_context;
+            const context_addr = std.fmt.allocPrint(alloc, "{x}", .{@intFromPtr(context_ptr)}) catch |err| {
+                std.log.err("Failed to format MiddlewareContext address: {}", .{err});
+                sendError(task.conn.stream, alloc, .internal_server_error, "Server Error");
+                result.success = false;
+                return;
+            };
+            ctx.set("middleware_context", context_addr) catch |err| {
+                std.log.err("Failed to set middleware_context in ctx: {}", .{err});
+                sendError(task.conn.stream, alloc, .internal_server_error, "Server Error");
+                alloc.free(context_addr);
+                result.success = false;
+                return;
+            };
+            callNext(&req, &res, &ctx);
+        } else {
+            const handler = task.server.router.find(req.method, req.path) orelse notFound;
+            handler(&req, &res, &ctx);
+        }
 
         res.send(task.conn.stream) catch |err| {
             std.log.err("Failed to send response: {}", .{err});
@@ -114,6 +150,33 @@ pub const Server = struct {
         };
 
         result.success = true;
+    }
+
+    const MiddlewareContext = struct {
+        middlewares: []const http.MiddlewareFn,
+        index: usize,
+        server: *Server,
+    };
+
+    fn callNext(req: *http.Request, res: *http.Response, ctx: *http.Context) void {
+        const context_addr = ctx.get("middleware_context") orelse {
+            std.log.err("Middleware context not found", .{});
+            return;
+        };
+        const context_ptr = @as(*MiddlewareContext, @ptrFromInt(
+            std.fmt.parseInt(usize, context_addr, 16) catch {
+                std.log.err("Invalid middleware context address", .{});
+                return;
+            },
+        ));
+        if (context_ptr.index < context_ptr.middlewares.len) {
+            const mw = context_ptr.middlewares[context_ptr.index];
+            context_ptr.index += 1;
+            mw(req, res, ctx, &callNext);
+        } else {
+            const handler = context_ptr.server.router.find(req.method, req.path) orelse notFound;
+            handler(req, res, ctx);
+        }
     }
 
     fn sendError(stream: std.net.Stream, alloc: std.mem.Allocator, status: http.StatusCode, msg: []const u8) void {
@@ -125,9 +188,9 @@ pub const Server = struct {
         res.send(stream) catch return;
     }
 
-    fn notFound(_: *http.Request, res: *http.Response) void {
+    fn notFound(_: *http.Request, res: *http.Response, _: *http.Context) void {
         res.status = .not_found;
-        res.body = "Not Found";
+        res.setBody("Not Found") catch return;
         res.setHeader("Content-Type", "text/plain") catch return;
     }
 };

@@ -1,11 +1,10 @@
-// zttp.zig - Main library file
 const std = @import("std");
 pub const Server = @import("server.zig").Server;
 pub const ThreadPool = @import("pool.zig").ThreadPool;
 pub const Request = @import("http.zig").Request;
 pub const Response = @import("http.zig").Response;
+pub const Context = @import("http.zig").Context;
 
-/// ServerOptions provides configuration for the HTTP server
 pub const ServerOptions = struct {
     port: u16 = 8080,
     min_threads: usize = 2,
@@ -14,14 +13,11 @@ pub const ServerOptions = struct {
     adaptive_scaling: bool = true,
 };
 
-/// Creates and starts an HTTP server with the given options
-/// This is a convenience function that sets up both the server and thread pool
 pub fn createServer(
     allocator: std.mem.Allocator,
     options: ServerOptions,
     comptime router_init_fn: ?fn (server: *Server) anyerror!void,
 ) !*ServerBundle {
-    // Create the thread pool
     const pool_options = ThreadPool.Options{
         .min_threads = options.min_threads,
         .max_threads = options.max_threads,
@@ -36,10 +32,8 @@ pub fn createServer(
         allocator.destroy(pool);
     }
 
-    // Start the worker threads
     try pool.startWorkers(options.min_threads);
 
-    // Create the server
     var server = try allocator.create(Server);
     server.* = Server.init(allocator, options.port, pool);
     errdefer {
@@ -47,12 +41,10 @@ pub fn createServer(
         allocator.destroy(server);
     }
 
-    // Setup router if a router init function was provided
     if (router_init_fn) |init_fn| {
         try init_fn(server);
     }
 
-    // Create the bundle that holds both the server and pool
     const bundle = try allocator.create(ServerBundle);
     bundle.* = ServerBundle{
         .allocator = allocator,
@@ -63,13 +55,11 @@ pub fn createServer(
     return bundle;
 }
 
-/// ServerBundle holds both the server and thread pool to manage their lifecycle
 pub const ServerBundle = struct {
     allocator: std.mem.Allocator,
     server: *Server,
     pool: *ThreadPool,
 
-    /// Start the server (non-blocking if start_thread is true)
     pub fn start(self: *ServerBundle, start_thread: bool) !void {
         if (start_thread) {
             const thread = try std.Thread.spawn(.{}, startServerThread, .{self.server});
@@ -79,7 +69,6 @@ pub const ServerBundle = struct {
         }
     }
 
-    /// Clean up all resources
     pub fn deinit(self: *ServerBundle) void {
         self.server.deinit();
         self.pool.deinit();
@@ -88,20 +77,21 @@ pub const ServerBundle = struct {
         self.allocator.destroy(self);
     }
 
-    /// Add a route to the server
-    pub fn route(self: *ServerBundle, path: []const u8, handler: fn (*Request, *Response) void) !void {
-        try self.server.route(path, handler);
+    pub fn route(self: *ServerBundle, method: []const u8, path: []const u8, handler: fn (*Request, *Response, *Context) void) !void {
+        try self.server.route(method, path, handler);
+    }
+
+    pub fn use(self: *ServerBundle, middleware: fn (*Request, *Response, *Context, *const fn (*Request, *Response, *Context) void) void) !void {
+        try self.server.use(middleware);
     }
 };
 
-/// Helper function to start the server in a separate thread
 fn startServerThread(server: *Server) void {
     server.start() catch |err| {
         std.log.err("Failed to start server: {}", .{err});
     };
 }
 
-/// Simple example usage
 pub fn example() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -116,24 +106,54 @@ pub fn example() !void {
     const server_bundle = try createServer(allocator, options, setupRoutes);
     defer server_bundle.deinit();
 
-    try server_bundle.start(false); // Start in current thread
+    try server_bundle.use(loggingMiddleware);
+    try server_bundle.start(false);
 }
 
 fn setupRoutes(server: *Server) !void {
-    try server.route("/", handleRoot);
-    try server.route("/hello", handleHello);
+    try server.route("GET", "/", handleRoot);
+    try server.route("GET", "/hello", handleHello);
+    try server.route("POST", "/data", handleData);
 }
 
-fn handleRoot(req: *Request, res: *Response) void {
-    _ = req;
+fn handleRoot(_: *Request, res: *Response, ctx: *Context) void {
     res.status = .ok;
-    _ = res.setHeader("Content-Type", "text/plain") catch return;
-    _ = res.setBody("Welcome to ZTTP!") catch return;
+    res.setHeader("Content-Type", "text/plain") catch return;
+    if (ctx.get("request_id")) |rid| {
+        res.setBody(try std.fmt.allocPrint(res.allocator, "Welcome to ZTTP! Request ID: {s}", .{rid})) catch return;
+    } else {
+        res.setBody("Welcome to ZTTP!") catch return;
+    }
 }
 
-fn handleHello(req: *Request, res: *Response) void {
-    _ = req;
+fn handleHello(_: *Request, res: *Response, _: *Context) void {
     res.status = .ok;
-    _ = res.setHeader("Content-Type", "text/plain") catch return;
-    _ = res.setBody("Hello, World!") catch return;
+    res.setHeader("Content-Type", "text/plain") catch return;
+    res.setBody("Hello, World!") catch return;
+}
+
+fn handleData(req: *Request, res: *Response, _: *Context) void {
+    res.status = .ok;
+    res.setHeader("Content-Type", "application/json") catch return;
+    if (req.json) |json| {
+        res.setJson(json) catch return;
+    } else if (req.form) |form| {
+        var obj = std.json.ObjectMap.init(res.allocator);
+        defer obj.deinit();
+        var it = form.iterator();
+        while (it.next()) |entry| {
+            try obj.put(entry.key_ptr.*, .{ .string = entry.value_ptr.* });
+        }
+        res.setJson(obj) catch return;
+    } else {
+        res.status = .bad_request;
+        res.setBody("Expected JSON or form data") catch return;
+    }
+}
+
+fn loggingMiddleware(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Request, *Response, *Context) void) void {
+    const request_id = std.fmt.allocPrint(ctx.allocator, "{d}", .{std.time.nanoTimestamp()}) catch "unknown";
+    ctx.set("request_id", request_id) catch return;
+    std.log.info("{s} {s} {s}", .{ req.method, req.path, request_id });
+    next(req, res, ctx);
 }

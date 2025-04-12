@@ -19,6 +19,7 @@ pub const Router = struct {
         method: []const u8,
         is_parametrized: bool,
         param_names: [][]const u8,
+        is_wildcard: bool,
     };
 
     pub fn init(allocator: std.mem.Allocator) Router {
@@ -48,14 +49,20 @@ pub const Router = struct {
 
         var param_names = std.ArrayList([]const u8).init(self.allocator);
         var is_parametrized = false;
+        var is_wildcard = false;
 
-        // Parse path segments for parameters
-        var segments = std.mem.splitScalar(u8, path, '/');
-        while (segments.next()) |segment| {
-            if (segment.len > 0 and segment[0] == ':') {
-                is_parametrized = true;
-                const param_name = try self.allocator.dupe(u8, segment[1..]);
-                try param_names.append(param_name);
+        // Check for wildcard
+        if (std.mem.endsWith(u8, path, "/*")) {
+            is_wildcard = true;
+        } else {
+            // Parse path segments for parameters
+            var segments = std.mem.splitScalar(u8, path, '/');
+            while (segments.next()) |segment| {
+                if (segment.len > 0 and segment[0] == ':') {
+                    is_parametrized = true;
+                    const param_name = try self.allocator.dupe(u8, segment[1..]);
+                    try param_names.append(param_name);
+                }
             }
         }
 
@@ -67,6 +74,7 @@ pub const Router = struct {
             .method = method_owned,
             .is_parametrized = is_parametrized,
             .param_names = try param_names.toOwnedSlice(),
+            .is_wildcard = is_wildcard,
         });
     }
 
@@ -78,9 +86,34 @@ pub const Router = struct {
         for (self.routes.items) |route| {
             if (!std.mem.eql(u8, route.method, method)) continue;
 
+            if (route.is_wildcard) {
+                // Match prefix up to '/*'
+                const prefix = route.path[0 .. route.path.len - 2]; // Remove '/*'
+                if (std.mem.startsWith(u8, path, prefix)) {
+                    // Trim leading '/' from suffix, if present
+                    var suffix = path[prefix.len..];
+                    if (suffix.len > 0 and suffix[0] == '/') {
+                        suffix = suffix[1..];
+                    }
+                    const suffix_owned = ctx.allocator.dupe(u8, suffix) catch {
+                        std.log.err("Failed to allocate wildcard suffix", .{});
+                        continue;
+                    };
+                    ctx.set("wildcard", suffix_owned) catch {
+                        std.log.err("Failed to set wildcard", .{});
+                        ctx.allocator.free(suffix_owned);
+                        continue;
+                    };
+                    std.log.debug("Wildcard route {s} matched, suffix: {s}", .{ route.path, suffix });
+                    return route.handler;
+                }
+                continue;
+            }
+
             if (!route.is_parametrized) {
                 // Static route: exact match
                 if (std.mem.eql(u8, route.path, path)) {
+                    std.log.debug("Static route {s} matched", .{route.path});
                     return route.handler;
                 }
             } else {

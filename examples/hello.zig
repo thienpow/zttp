@@ -165,6 +165,66 @@ fn bundleMiddleware(req: *Request, res: *Response, ctx: *Context, next: *const f
     next(req, res, ctx);
 }
 
+fn fileHandler(_: *Request, res: *Response, ctx: *Context) void {
+    const wildcard = ctx.get("wildcard") orelse "";
+    if (wildcard.len == 0) {
+        res.status = .not_found;
+        res.setBody("File not specified") catch return;
+        res.setHeader("Content-Type", "text/plain") catch return;
+        std.log.info("No file specified for /files/*", .{});
+        return;
+    }
+
+    // Construct file path
+    const file_path = std.fmt.allocPrint(res.allocator, "static/{s}", .{wildcard}) catch {
+        res.status = .internal_server_error;
+        res.setBody("Failed to construct file path") catch return;
+        std.log.err("Failed to allocate file path for {s}", .{wildcard});
+        return;
+    };
+    defer res.allocator.free(file_path);
+
+    // Open file
+    const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
+        res.status = .not_found;
+        res.setBody("File not found") catch return;
+        res.setHeader("Content-Type", "text/plain") catch return;
+        std.log.warn("Failed to open file {s}: {}", .{ file_path, err });
+        return;
+    };
+    defer file.close();
+
+    // Read file contents
+    const file_size = file.getEndPos() catch |err| {
+        res.status = .internal_server_error;
+        res.setBody("Failed to read file") catch return;
+        std.log.err("Failed to get size of {s}: {}", .{ file_path, err });
+        return;
+    };
+    const content = file.readToEndAlloc(res.allocator, file_size) catch |err| {
+        res.status = .internal_server_error;
+        res.setBody("Failed to read file") catch return;
+        std.log.err("Failed to read {s}: {}", .{ file_path, err });
+        return;
+    };
+
+    // Set Content-Type based on extension
+    const ext = std.fs.path.extension(wildcard);
+    const content_type = if (std.mem.eql(u8, ext, ".txt"))
+        "text/plain"
+    else if (std.mem.eql(u8, ext, ".jpg") or std.mem.eql(u8, ext, ".jpeg"))
+        "image/jpeg"
+    else if (std.mem.eql(u8, ext, ".png"))
+        "image/png"
+    else
+        "application/octet-stream";
+
+    res.status = .ok;
+    res.setBody(content) catch return;
+    res.setHeader("Content-Type", content_type) catch return;
+    std.log.info("Served file {s}, type: {s}", .{ wildcard, content_type });
+}
+
 fn setupRoutes(server: *Server) !void {
     try server.use(loggingMiddleware);
     try server.use(bundleMiddleware);
@@ -173,6 +233,7 @@ fn setupRoutes(server: *Server) !void {
     try server.route("GET", "/async", asyncEndpoint);
     try server.route("GET", "/users/:id", userHandler);
     try server.route("GET", "/users/:id/posts/:post_id", postHandler);
+    try server.route("GET", "/files/*", fileHandler);
 }
 
 pub fn main() !void {

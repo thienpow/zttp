@@ -1,4 +1,3 @@
-// src/zttp.zig
 const std = @import("std");
 pub const Server = @import("server.zig").Server;
 pub const ThreadPool = @import("pool.zig").ThreadPool;
@@ -10,6 +9,17 @@ pub const HandlerFn = @import("router.zig").HandlerFn;
 pub const NextFn = @import("router.zig").NextFn;
 pub const Router = @import("router.zig").Router;
 
+pub const HttpMethod = enum {
+    get,
+    post,
+    put,
+    delete,
+    patch,
+    head,
+    options,
+    trace,
+};
+
 pub const ServerOptions = struct {
     port: u16 = 8080,
     min_threads: usize = 2,
@@ -20,7 +30,7 @@ pub const ServerOptions = struct {
 
 pub const Route = struct {
     module_name: []const u8,
-    method: []const u8,
+    method: HttpMethod,
     path: []const u8,
     handler: HandlerFn,
 };
@@ -28,7 +38,7 @@ pub const Route = struct {
 fn loggingMiddleware(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Request, *Response, *Context) void) void {
     const request_id = std.fmt.allocPrint(ctx.allocator, "{d}", .{std.time.nanoTimestamp()}) catch "unknown";
     ctx.set("request_id", request_id) catch return;
-    std.log.info("{s} {s} {s}", .{ req.method, req.path, request_id });
+    std.log.info("{s} {s} {s}", .{ @tagName(req.method), req.path, request_id });
     next(req, res, ctx);
 }
 
@@ -96,7 +106,7 @@ pub const ServerBundle = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn route(self: *ServerBundle, method: []const u8, path: []const u8, handler: HandlerFn) !void {
+    pub fn route(self: *ServerBundle, method: HttpMethod, path: []const u8, handler: HandlerFn) !void {
         try self.server.route(method, path, handler);
     }
 
@@ -109,7 +119,6 @@ pub const ServerBundle = struct {
         defer {
             for (routes) |r| {
                 self.allocator.free(r.module_name);
-                self.allocator.free(r.method);
                 self.allocator.free(r.path);
             }
             self.allocator.free(routes);
@@ -120,7 +129,7 @@ pub const ServerBundle = struct {
         }
 
         for (routes) |r| {
-            std.log.info("Registering route: {s} {s}", .{ r.method, r.path });
+            std.log.info("Registering route: {s} {s}", .{ @tagName(r.method), r.path });
             try self.server.route(r.method, r.path, r.handler);
         }
     }

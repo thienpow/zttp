@@ -1,8 +1,8 @@
-// src/router.zig
 const std = @import("std");
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const Context = @import("context.zig").Context;
+const HttpMethod = @import("zttp.zig").HttpMethod;
 
 pub const HandlerFn = *const fn (*Request, *Response, *Context) void;
 pub const MiddlewareFn = *const fn (*Request, *Response, *Context, NextFn) void;
@@ -16,7 +16,7 @@ pub const Router = struct {
     const Route = struct {
         path: []const u8,
         handler: HandlerFn,
-        method: []const u8,
+        method: HttpMethod,
         is_parametrized: bool,
         param_names: [][]const u8,
         is_wildcard: bool,
@@ -33,7 +33,6 @@ pub const Router = struct {
     pub fn deinit(self: *Router) void {
         for (self.routes.items) |route| {
             self.allocator.free(route.path);
-            self.allocator.free(route.method);
             for (route.param_names) |param| {
                 self.allocator.free(param);
             }
@@ -43,9 +42,8 @@ pub const Router = struct {
         self.middlewares.deinit();
     }
 
-    pub fn add(self: *Router, method: []const u8, path: []const u8, handler: HandlerFn) !void {
+    pub fn add(self: *Router, method: HttpMethod, path: []const u8, handler: HandlerFn) !void {
         if (path.len == 0 or path[0] != '/') return error.InvalidPath;
-        if (!@import("request.zig").isValidMethod(method)) return error.InvalidMethod;
 
         var param_names = std.ArrayList([]const u8).init(self.allocator);
         var is_parametrized = false;
@@ -67,11 +65,10 @@ pub const Router = struct {
         }
 
         const path_owned = try self.allocator.dupe(u8, path);
-        const method_owned = try self.allocator.dupe(u8, method);
         try self.routes.append(.{
             .path = path_owned,
             .handler = handler,
-            .method = method_owned,
+            .method = method,
             .is_parametrized = is_parametrized,
             .param_names = try param_names.toOwnedSlice(),
             .is_wildcard = is_wildcard,
@@ -82,9 +79,9 @@ pub const Router = struct {
         try self.middlewares.append(middleware);
     }
 
-    pub fn find(self: *Router, method: []const u8, path: []const u8, ctx: *Context) ?HandlerFn {
+    pub fn find(self: *Router, method: HttpMethod, path: []const u8, ctx: *Context) ?HandlerFn {
         for (self.routes.items) |route| {
-            if (!std.mem.eql(u8, route.method, method)) continue;
+            if (route.method != method) continue;
 
             if (route.is_wildcard) {
                 // Match prefix up to '/*'
@@ -192,7 +189,7 @@ pub const Router = struct {
                 }
             }
         }
-        std.log.debug("No route matched for {s} {s}", .{ method, path });
+        std.log.debug("No route matched for {s} {s}", .{ @tagName(method), path });
         return null;
     }
 

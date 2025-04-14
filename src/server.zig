@@ -1,4 +1,3 @@
-/// src/server.zig
 const std = @import("std");
 const Context = @import("context.zig").Context;
 const Request = @import("request.zig").Request;
@@ -9,6 +8,7 @@ const HandlerFn = @import("router.zig").HandlerFn;
 const MiddlewareFn = @import("router.zig").MiddlewareFn;
 const NextFn = @import("router.zig").NextFn;
 const Router = @import("router.zig").Router;
+const HttpMethod = @import("zttp.zig").HttpMethod;
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
@@ -36,7 +36,7 @@ pub const Server = struct {
         self.router.deinit();
     }
 
-    pub fn route(self: *Server, method: []const u8, path: []const u8, handler: HandlerFn) !void {
+    pub fn route(self: *Server, method: HttpMethod, path: []const u8, handler: HandlerFn) !void {
         try self.router.add(method, path, handler);
     }
 

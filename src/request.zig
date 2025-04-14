@@ -1,9 +1,9 @@
-// src/request.zig
 const std = @import("std");
+const HttpMethod = @import("zttp.zig").HttpMethod;
 
 pub const Request = struct {
     allocator: std.mem.Allocator,
-    method: []const u8,
+    method: HttpMethod,
     path: []const u8,
     version: []const u8,
     headers: std.StringHashMap([]const u8),
@@ -24,7 +24,7 @@ pub const Request = struct {
         if (data.len > 65536) return error.RequestTooLarge;
         var req = Request{
             .allocator = allocator,
-            .method = "",
+            .method = undefined, // Will be set by parseMethod
             .path = "",
             .version = "",
             .headers = std.StringHashMap([]const u8).init(allocator),
@@ -39,8 +39,8 @@ pub const Request = struct {
         const request_line = lines.next() orelse return error.InvalidRequest;
         var parts = std.mem.splitScalar(u8, request_line, ' ');
 
-        req.method = try allocator.dupe(u8, parts.next() orelse return error.InvalidRequest);
-        if (!isValidMethod(req.method)) return error.InvalidMethod;
+        const method_str = parts.next() orelse return error.InvalidRequest;
+        req.method = try parseMethod(method_str);
 
         const raw_path = parts.next() orelse return error.InvalidRequest;
         const path_parts = try parsePath(allocator, raw_path);
@@ -72,13 +72,13 @@ pub const Request = struct {
                     const len = try std.fmt.parseInt(usize, len_str, 10);
                     if (body_data.len >= len) {
                         req.body = try allocator.dupe(u8, body_data[0..len]);
-                        try parseBody(&req);
+                        try parseBody(&req, allocator);
                     } else {
                         return error.IncompleteBody;
                     }
                 } else {
                     req.body = try allocator.dupe(u8, body_data);
-                    try parseBody(&req);
+                    try parseBody(&req, allocator);
                 }
             }
         }
@@ -87,7 +87,6 @@ pub const Request = struct {
     }
 
     pub fn deinit(self: *Request) void {
-        self.allocator.free(self.method);
         self.allocator.free(self.path);
         self.allocator.free(self.version);
         var it = self.headers.iterator();
@@ -159,7 +158,7 @@ fn parsePath(allocator: std.mem.Allocator, raw_path: []const u8) !struct { path:
     return .{ .path = try allocator.dupe(u8, raw_path), .query = query };
 }
 
-fn parseBody(self: *Request) !void {
+fn parseBody(self: *Request, allocator: std.mem.Allocator) !void {
     if (self.body == null or self.body.?.len == 0) return;
     if (self.headers.get("Content-Type")) |ct| {
         if (std.mem.startsWith(u8, ct, "application/json")) {
@@ -176,8 +175,8 @@ fn parseBody(self: *Request) !void {
             while (pairs.next()) |pair| {
                 if (pair.len == 0) continue;
                 const eq = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
-                const key = try self.allocator.dupe(u8, pair[0..eq]);
-                const value = try self.allocator.dupe(u8, pair[eq + 1 ..]);
+                const key = try allocator.dupe(u8, pair[0..eq]);
+                const value = try allocator.dupe(u8, pair[eq + 1 ..]);
                 try self.form.?.put(key, value);
             }
         } else if (std.mem.startsWith(u8, ct, "multipart/form-data")) {
@@ -235,10 +234,8 @@ fn parseMultipart(allocator: std.mem.Allocator, body: []const u8, boundary: []co
     return parts;
 }
 
-pub fn isValidMethod(method: []const u8) bool {
-    const valid = [_][]const u8{ "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "TRACE", "CONNECT" };
-    for (valid) |m| {
-        if (std.mem.eql(u8, method, m)) return true;
-    }
-    return false;
+fn parseMethod(method_str: []const u8) !HttpMethod {
+    if (std.mem.eql(u8, method_str, "GET")) return .get;
+    if (std.mem.eql(u8, method_str, "POST")) return .post;
+    return error.InvalidMethod;
 }

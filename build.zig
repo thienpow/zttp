@@ -5,6 +5,13 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Export zttp module for dependencies
+    const zttp_module = b.addModule("zttp", .{
+        .root_source_file = b.path("src/zttp.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Routegen executable
     const routegen = b.addExecutable(.{
         .name = "routegen",
@@ -12,6 +19,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    routegen.root_module.addImport("zttp", zttp_module);
+
     // Install routegen as an artifact
     const install_routegen = b.addInstallArtifact(routegen, .{
         .dest_dir = .{ .override = .bin },
@@ -28,13 +37,6 @@ pub fn build(b: *std.Build) void {
     });
     lib.step.dependOn(routegen_step);
     b.installArtifact(lib);
-
-    // Export zttp module for dependencies
-    const zttp_module = b.addModule("zttp", .{
-        .root_source_file = b.path("src/zttp.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
 
     // Ensure routegen is installed for dependencies
     b.getInstallStep().dependOn(&install_routegen.step);

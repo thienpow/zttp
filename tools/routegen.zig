@@ -1,5 +1,5 @@
-// tools/routegen.zig
 const std = @import("std");
+const HttpMethod = @import("zttp").HttpMethod;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -46,72 +46,77 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
     var walker = try dir.walk(allocator);
     defer walker.deinit();
 
+    const http_methods = [_]HttpMethod{ .get, .post };
+
     var routes = std.ArrayList(struct {
         module: []const u8,
         import_path: []const u8,
         path: []const u8,
-        method: []const u8,
+        method: HttpMethod,
+        handler_name: []const u8,
     }).init(allocator);
     defer {
         for (routes.items) |r| {
             allocator.free(r.module);
             allocator.free(r.import_path);
             allocator.free(r.path);
-            allocator.free(r.method);
+            allocator.free(r.handler_name);
         }
         routes.deinit();
     }
 
     while (try walker.next()) |entry| {
         if (entry.kind != .file or !std.mem.endsWith(u8, entry.basename, ".zig")) continue;
+
         const module_name = entry.basename[0 .. entry.basename.len - 4];
 
-        // Create import path correctly - just use the full path from walker
-        const import_path = try allocator.dupe(u8, entry.path);
-
-        // Build URL route path
         var path_buf = std.ArrayList(u8).init(allocator);
         defer path_buf.deinit();
+        try path_buf.append('/');
 
-        try path_buf.appendSlice("/");
+        var path_components = std.mem.splitScalar(u8, entry.path, '/');
+        var components = std.ArrayList([]const u8).init(allocator);
+        defer components.deinit();
 
-        // Add directory path components to URL route, but without the .zig file extension
-        if (entry.path.len > 0) {
-            // Strip .zig from the path for URL construction
-            const path_without_ext = if (std.mem.endsWith(u8, entry.path, ".zig"))
-                entry.path[0 .. entry.path.len - 4]
-            else
-                entry.path;
-
-            var iter = std.mem.splitScalar(u8, path_without_ext, '/');
-            while (iter.next()) |component| {
-                if (component.len == 0) continue;
-                try path_buf.appendSlice(component);
-                try path_buf.appendSlice("/");
+        while (path_components.next()) |component| {
+            if (!std.mem.eql(u8, component, "index.zig")) {
+                try components.append(component);
             }
         }
 
-        // The last component should be replaced with the transformed module name
-        // First, remove the last slash if present
-        if (path_buf.items.len > 0 and path_buf.items[path_buf.items.len - 1] == '/') {
-            _ = path_buf.pop();
-        }
-
-        // For the path, we want to transform underscores to slashes
-        try path_buf.appendSlice("/");
-        for (module_name) |c| {
-            try path_buf.append(if (c == '_') '/' else c);
+        for (components.items, 0..) |component, i| {
+            if (std.mem.endsWith(u8, component, ".zig")) {
+                const name = component[0 .. component.len - 4];
+                var buf = std.ArrayList(u8).init(allocator);
+                defer buf.deinit();
+                for (name) |c| {
+                    try buf.append(if (c == '_') '/' else c);
+                }
+                try path_buf.appendSlice(buf.items);
+            } else {
+                try path_buf.appendSlice(component);
+            }
+            if (i < components.items.len - 1) {
+                try path_buf.append('/');
+            }
         }
 
         const route_path = try path_buf.toOwnedSlice();
 
-        try routes.append(.{
-            .module = try allocator.dupe(u8, module_name),
-            .import_path = import_path,
-            .path = route_path,
-            .method = try allocator.dupe(u8, "GET"), // Default, overridden in generated code
-        });
-        std.debug.print("Found route: {s} ({s}) [import: routes/{s}]\n", .{ route_path, module_name, import_path });
+        for (http_methods) |method| {
+            const import_path = try allocator.dupe(u8, entry.path);
+            const method_str = @tagName(method);
+            try routes.append(.{
+                .module = try allocator.dupe(u8, module_name),
+                .import_path = import_path,
+                .path = try allocator.dupe(u8, route_path),
+                .method = method,
+                .handler_name = try allocator.dupe(u8, method_str),
+            });
+            std.debug.print("Found route: {s} {s} ({s}) [import: routes/{s}]\n", .{ method_str, route_path, module_name, import_path });
+        }
+
+        allocator.free(route_path);
     }
 
     var file = try std.fs.cwd().createFile(output_file, .{});
@@ -130,7 +135,6 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
         \\    errdefer {
         \\        for (routes.items) |r| {
         \\            allocator.free(r.module_name);
-        \\            allocator.free(r.method);
         \\            allocator.free(r.path);
         \\        }
         \\        routes.deinit();
@@ -146,38 +150,36 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
         );
         try buf.appendSlice(route.import_path);
         try buf.appendSlice(
-            \\"), "handler") and
-            \\        @hasDecl(@import("routes/
+            \\"), "
         );
-        try buf.appendSlice(route.import_path);
+        try buf.appendSlice(route.handler_name);
         try buf.appendSlice(
-            \\"), "method") and
-            \\        @hasDecl(@import("routes/
-        );
-        try buf.appendSlice(route.import_path);
-        try buf.appendSlice(
-            \\"), "path")) {
+            \\")) {
             \\        try routes.append(Route{
             \\            .module_name = try allocator.dupe(u8, "
         );
         try buf.appendSlice(route.module);
         try buf.appendSlice(
             \\"),
-            \\            .method = try allocator.dupe(u8, @import("routes/
+            \\            .method = .
         );
-        try buf.appendSlice(route.import_path);
+        try buf.appendSlice(@tagName(route.method));
         try buf.appendSlice(
-            \\").method),
-            \\            .path = try allocator.dupe(u8, @import("routes/
+            \\,
+            \\            .path = try allocator.dupe(u8, "
         );
-        try buf.appendSlice(route.import_path);
+        try buf.appendSlice(route.path);
         try buf.appendSlice(
-            \\").path),
+            \\"),
             \\            .handler = @import("routes/
         );
         try buf.appendSlice(route.import_path);
         try buf.appendSlice(
-            \\").handler,
+            \\").
+        );
+        try buf.appendSlice(route.handler_name);
+        try buf.appendSlice(
+            \\,
             \\        });
             \\    }
             \\

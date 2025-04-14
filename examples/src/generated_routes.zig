@@ -9,39 +9,56 @@ pub fn getRoutes(allocator: std.mem.Allocator) ![]const Route {
     errdefer {
         for (routes.items) |r| {
             allocator.free(r.module_name);
-            allocator.free(r.method);
             allocator.free(r.path);
         }
         routes.deinit();
     }
-    if (@hasDecl(@import("routes/index.zig"), "handler") and
-        @hasDecl(@import("routes/index.zig"), "method") and
-        @hasDecl(@import("routes/index.zig"), "path")) {
+    if (@hasDecl(@import("routes/index.zig"), "get")) {
         try routes.append(Route{
             .module_name = try allocator.dupe(u8, "index"),
-            .method = try allocator.dupe(u8, @import("routes/index.zig").method),
-            .path = try allocator.dupe(u8, @import("routes/index.zig").path),
-            .handler = @import("routes/index.zig").handler,
+            .method = .get,
+            .path = try allocator.dupe(u8, "/"),
+            .handler = @import("routes/index.zig").get,
         });
     }
-    if (@hasDecl(@import("routes/users/:id/+page.zig"), "handler") and
-        @hasDecl(@import("routes/users/:id/+page.zig"), "method") and
-        @hasDecl(@import("routes/users/:id/+page.zig"), "path")) {
+    if (@hasDecl(@import("routes/index.zig"), "post")) {
         try routes.append(Route{
-            .module_name = try allocator.dupe(u8, "+page"),
-            .method = try allocator.dupe(u8, @import("routes/users/:id/+page.zig").method),
-            .path = try allocator.dupe(u8, @import("routes/users/:id/+page.zig").path),
-            .handler = @import("routes/users/:id/+page.zig").handler,
+            .module_name = try allocator.dupe(u8, "index"),
+            .method = .post,
+            .path = try allocator.dupe(u8, "/"),
+            .handler = @import("routes/index.zig").post,
         });
     }
-    if (@hasDecl(@import("routes/api/json.zig"), "handler") and
-        @hasDecl(@import("routes/api/json.zig"), "method") and
-        @hasDecl(@import("routes/api/json.zig"), "path")) {
+    if (@hasDecl(@import("routes/users/:id/index.zig"), "get")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "index"),
+            .method = .get,
+            .path = try allocator.dupe(u8, "/users/:id"),
+            .handler = @import("routes/users/:id/index.zig").get,
+        });
+    }
+    if (@hasDecl(@import("routes/users/:id/index.zig"), "post")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "index"),
+            .method = .post,
+            .path = try allocator.dupe(u8, "/users/:id"),
+            .handler = @import("routes/users/:id/index.zig").post,
+        });
+    }
+    if (@hasDecl(@import("routes/api/json.zig"), "get")) {
         try routes.append(Route{
             .module_name = try allocator.dupe(u8, "json"),
-            .method = try allocator.dupe(u8, @import("routes/api/json.zig").method),
-            .path = try allocator.dupe(u8, @import("routes/api/json.zig").path),
-            .handler = @import("routes/api/json.zig").handler,
+            .method = .get,
+            .path = try allocator.dupe(u8, "/api/json"),
+            .handler = @import("routes/api/json.zig").get,
+        });
+    }
+    if (@hasDecl(@import("routes/api/json.zig"), "post")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "json"),
+            .method = .post,
+            .path = try allocator.dupe(u8, "/api/json"),
+            .handler = @import("routes/api/json.zig").post,
         });
     }
     return routes.toOwnedSlice();

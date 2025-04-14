@@ -1,3 +1,4 @@
+// examples/build.zig
 const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -8,9 +9,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const zttp_module = zttp_dep.module("zttp");
 
     // Get the routegen tool
     const routegen = zttp_dep.artifact("routegen");
+    //routegen.root_module.addImport("zttp", zttp_module);
 
     // Create the routegen step
     const routegen_step = b.step("routegen", "Generate routes");
@@ -30,7 +33,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    exe.root_module.addImport("zttp", zttp_dep.module("zttp"));
+    exe.root_module.addImport("zttp", zttp_module);
     exe.step.dependOn(routegen_step); // Ensure routes are generated
 
     // Install artifact

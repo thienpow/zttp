@@ -6,22 +6,18 @@ const Context = zttp.Context;
 
 pub fn get(_: *Request, res: *Response, ctx: *Context) void {
     res.status = .ok;
-    const message = if (ctx.get("request_id")) |rid|
-        std.fmt.allocPrint(res.allocator, "Hello, World! Request ID: {s}", .{rid}) catch "Hello, World!"
-    else
-        "Hello, World!";
+    const user_id = ctx.get("id") orelse "unknown";
+    const message = std.fmt.allocPrint(res.allocator, "User ID: {s}", .{user_id}) catch "Error";
     res.setBody(message) catch return;
     res.setHeader("Content-Type", "text/plain") catch return;
-    std.log.info("Served GET hello endpoint", .{});
+    std.log.info("Served GET user endpoint with id: {s}", .{user_id});
 }
 
 pub fn post(_: *Request, res: *Response, ctx: *Context) void {
     res.status = .ok;
-    const message = if (ctx.get("request_id")) |rid|
-        std.fmt.allocPrint(res.allocator, "Posted! Request ID: {s}", .{rid}) catch "Posted!"
-    else
-        "Posted!";
+    const user_id = ctx.get("id") orelse "unknown";
+    const message = std.fmt.allocPrint(res.allocator, "Posted for User ID: {s}", .{user_id}) catch "Error";
     res.setBody(message) catch return;
     res.setHeader("Content-Type", "text/plain") catch return;
-    std.log.info("Served POST hello endpoint", .{});
+    std.log.info("Served POST user endpoint with id: {s}", .{user_id});
 }

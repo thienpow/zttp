@@ -14,24 +14,24 @@ pub fn getRoutes(allocator: std.mem.Allocator) ![]const Route {
         }
         routes.deinit();
     }
-    if (@hasDecl(@import("routes/get_hello.zig"), "handler") and
-        @hasDecl(@import("routes/get_hello.zig"), "method") and
-        @hasDecl(@import("routes/get_hello.zig"), "path")) {
+    if (@hasDecl(@import("routes/index.zig"), "handler") and
+        @hasDecl(@import("routes/index.zig"), "method") and
+        @hasDecl(@import("routes/index.zig"), "path")) {
         try routes.append(Route{
-            .module_name = try allocator.dupe(u8, "get_hello"),
-            .method = try allocator.dupe(u8, @import("routes/get_hello.zig").method),
-            .path = try allocator.dupe(u8, @import("routes/get_hello.zig").path),
-            .handler = @import("routes/get_hello.zig").handler,
+            .module_name = try allocator.dupe(u8, "index"),
+            .method = try allocator.dupe(u8, @import("routes/index.zig").method),
+            .path = try allocator.dupe(u8, @import("routes/index.zig").path),
+            .handler = @import("routes/index.zig").handler,
         });
     }
-    if (@hasDecl(@import("routes/users_id.zig"), "handler") and
-        @hasDecl(@import("routes/users_id.zig"), "method") and
-        @hasDecl(@import("routes/users_id.zig"), "path")) {
+    if (@hasDecl(@import("routes/users/:id/+page.zig"), "handler") and
+        @hasDecl(@import("routes/users/:id/+page.zig"), "method") and
+        @hasDecl(@import("routes/users/:id/+page.zig"), "path")) {
         try routes.append(Route{
-            .module_name = try allocator.dupe(u8, "users_id"),
-            .method = try allocator.dupe(u8, @import("routes/users_id.zig").method),
-            .path = try allocator.dupe(u8, @import("routes/users_id.zig").path),
-            .handler = @import("routes/users_id.zig").handler,
+            .module_name = try allocator.dupe(u8, "+page"),
+            .method = try allocator.dupe(u8, @import("routes/users/:id/+page.zig").method),
+            .path = try allocator.dupe(u8, @import("routes/users/:id/+page.zig").path),
+            .handler = @import("routes/users/:id/+page.zig").handler,
         });
     }
     if (@hasDecl(@import("routes/api/json.zig"), "handler") and

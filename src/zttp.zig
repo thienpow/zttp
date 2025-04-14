@@ -25,10 +25,16 @@ pub const Route = struct {
     handler: HandlerFn,
 };
 
+fn loggingMiddleware(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Request, *Response, *Context) void) void {
+    const request_id = std.fmt.allocPrint(ctx.allocator, "{d}", .{std.time.nanoTimestamp()}) catch "unknown";
+    ctx.set("request_id", request_id) catch return;
+    std.log.info("{s} {s} {s}", .{ req.method, req.path, request_id });
+    next(req, res, ctx);
+}
+
 pub fn createServer(
     allocator: std.mem.Allocator,
     options: ServerOptions,
-    comptime routes: []const Route,
 ) !*ServerBundle {
     const pool_options = ThreadPool.Options{
         .min_threads = options.min_threads,
@@ -58,10 +64,11 @@ pub fn createServer(
         .allocator = allocator,
         .server = server,
         .pool = pool,
+        .options = options,
     };
 
-    // Load provided routes
-    try bundle.loadRoutes(routes);
+    // Add default logging middleware
+    try bundle.use(loggingMiddleware);
 
     return bundle;
 }
@@ -70,6 +77,7 @@ pub const ServerBundle = struct {
     allocator: std.mem.Allocator,
     server: *Server,
     pool: *ThreadPool,
+    options: ServerOptions,
 
     pub fn start(self: *ServerBundle, start_thread: bool) !void {
         if (start_thread) {
@@ -96,7 +104,21 @@ pub const ServerBundle = struct {
         try self.server.use(middleware);
     }
 
-    pub fn loadRoutes(self: *ServerBundle, routes: []const Route) !void {
+    pub fn loadRoutes(self: *ServerBundle, comptime getRoutesFn: fn (std.mem.Allocator) anyerror![]const Route) !void {
+        const routes = try getRoutesFn(self.allocator);
+        defer {
+            for (routes) |r| {
+                self.allocator.free(r.module_name);
+                self.allocator.free(r.method);
+                self.allocator.free(r.path);
+            }
+            self.allocator.free(routes);
+        }
+
+        if (routes.len == 0) {
+            std.log.warn("No routes loaded", .{});
+        }
+
         for (routes) |r| {
             std.log.info("Registering route: {s} {s}", .{ r.method, r.path });
             try self.server.route(r.method, r.path, r.handler);

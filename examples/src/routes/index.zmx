@@ -1,0 +1,64 @@
+<p>Debug: logged_in = {{logged_in}}</p>
+<p>Debug: username = {{username}}</p>
+<p>Debug: role = {{role}}</p>
+<p>Debug: theme = {{theme}}</p>
+#for item in items
+    <p>{{item}}</p>
+#endfor
+<p>Marker: After items</p>
+#if logged_in
+    <p>Welcome back, {{username}}!</p>
+#else
+    <p>Please log in to continue.</p>
+#endif
+<p>Marker: After first logged_in</p>
+#set counter = 0
+#while counter < 3
+    <p>Iteration {{counter}}</p>
+    #set counter = counter + 1
+#endwhile
+<p>Marker: After while</p>
+#if show
+    <h2>Content is visible!</h2>
+#elseif cond1
+    <h2>Condition 1 is true.</h2>
+#elseif cond2
+    <h2>Condition 2 is true.</h2>
+#else
+    <h2>No conditions met.</h2>
+#endif
+<p>Marker: After conditions</p>
+#if logged_in
+    <p>Debug: Inside second logged_in block</p>
+    #if username
+        <p>User {{username}} is authenticated.</p>
+    #else
+        <p>Logged in but no username provided.</p>
+    #endif
+#else
+    <p>Access denied. Please authenticate.</p>
+#endif
+<p>Marker: After second logged_in</p>
+<p>Debug: Testing role = {{role}}</p>
+#if role == "user"
+    <p>You have user-level access.</p>
+#elseif role == "guest"
+    <p>You are browsing as a guest.</p>
+#else
+    <p>No role assigned.</p>
+#endif
+<p>Marker: After role</p>
+<p>Debug: Testing theme = {{theme}}</p>
+#if theme == "default"
+    <p>Default theme applied.</p>
+#elseif theme == "light"
+    <p>Using light mode theme.</p>
+#else
+    <p>Default theme applied.</p>
+#endif
+<p>Marker: After theme</p>
+<form method="POST" action="/">
+    <label>Username: <input type="text" name="username"></label>
+    <button type="submit">Submit</button>
+</form>
+<p>Marker: End of template</p>

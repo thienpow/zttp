@@ -13,7 +13,6 @@ pub fn build(b: *std.Build) void {
 
     // Get the routegen tool
     const routegen = zttp_dep.artifact("routegen");
-    //routegen.root_module.addImport("zttp", zttp_module);
 
     // Create the routegen step
     const routegen_step = b.step("routegen", "Generate routes");

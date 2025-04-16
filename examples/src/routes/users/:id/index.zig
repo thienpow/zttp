@@ -10,7 +10,7 @@ pub fn get(_: *Request, res: *Response, ctx: *Context) void {
     const message = std.fmt.allocPrint(res.allocator, "User ID: {s}", .{user_id}) catch "Error";
     res.setBody(message) catch return;
     res.setHeader("Content-Type", "text/plain") catch return;
-    std.log.info("Served GET user endpoint with id: {s}", .{user_id});
+    // std.log.info("Served GET user endpoint with id: {s}", .{user_id});
 }
 
 pub fn post(_: *Request, res: *Response, ctx: *Context) void {
@@ -19,5 +19,5 @@ pub fn post(_: *Request, res: *Response, ctx: *Context) void {
     const message = std.fmt.allocPrint(res.allocator, "Posted for User ID: {s}", .{user_id}) catch "Error";
     res.setBody(message) catch return;
     res.setHeader("Content-Type", "text/plain") catch return;
-    std.log.info("Served POST user endpoint with id: {s}", .{user_id});
+    //std.log.info("Served POST user endpoint with id: {s}", .{user_id});
 }

@@ -9,7 +9,7 @@ pub fn get(req: *Request, res: *Response, ctx: *Context) void {
 
     const request_id = ctx.get("request_id");
     const logged_in = request_id != null;
-    std.log.info("GET: request_id={?s}, logged_in={}", .{ request_id, logged_in });
+    //std.log.info("GET: request_id={?s}, logged_in={}", .{ request_id, logged_in });
     ctx.set("logged_in", if (logged_in) "true" else "false") catch {
         std.log.err("Failed to set logged_in context", .{});
         return;
@@ -29,7 +29,7 @@ pub fn get(req: *Request, res: *Response, ctx: *Context) void {
             res.allocator.free(decoded);
         }
     }
-    std.log.info("GET: username={s}", .{username});
+    //std.log.info("GET: username={s}", .{username});
     ctx.set("username", username) catch {
         std.log.err("Failed to set username context", .{});
         return;
@@ -40,49 +40,38 @@ pub fn get(req: *Request, res: *Response, ctx: *Context) void {
         return;
     };
     const role = if (logged_in) "user" else "guest";
-    std.log.info("GET: role={s}", .{role});
+    //std.log.info("GET: role={s}", .{role});
     ctx.set("role", role) catch {
         std.log.err("Failed to set role context", .{});
         return;
     };
     const show = if (req.query.get("show")) |v| v else "false";
-    std.log.info("GET: show={s}", .{show});
+    //std.log.info("GET: show={s}", .{show});
     ctx.set("show", show) catch {
         std.log.err("Failed to set show context", .{});
         return;
     };
     const cond1 = if (req.query.get("cond1")) |v| v else "true";
-    std.log.info("GET: cond1={s}", .{cond1});
+    //std.log.info("GET: cond1={s}", .{cond1});
     ctx.set("cond1", cond1) catch {
         std.log.err("Failed to set cond1 context", .{});
         return;
     };
     const cond2 = if (req.query.get("cond2")) |v| v else "false";
-    std.log.info("GET: cond2={s}", .{cond2});
+    //std.log.info("GET: cond2={s}", .{cond2});
     ctx.set("cond2", cond2) catch {
         std.log.err("Failed to set cond2 context", .{});
         return;
     };
     const theme = if (req.query.get("theme")) |v| v else "default";
-    std.log.info("GET: theme={s}", .{theme});
+    //std.log.info("GET: theme={s}", .{theme});
     ctx.set("theme", theme) catch {
-        std.log.err("Failed to set theme context", .{});
+        //std.log.err("Failed to set theme context", .{});
         return;
     };
 
-    const rendered = zttp.Template.renderTemplate(res.allocator, "src/routes/index.zmx", ctx) catch |err| {
-        std.log.err("Template error: {}", .{err});
-        res.setBody("Internal Server Error") catch return;
-        res.status = .internal_server_error;
-        return;
-    };
-
-    res.setBody(rendered) catch return;
-    res.setHeader("Content-Type", "text/html") catch return;
-    std.log.info("Served GET index endpoint", .{});
-
-    std.log.info("{s}", .{@src().file});
-    std.log.info("{s}", .{req.path});
+    //std.log.info("{s}", .{@src().file});
+    //std.log.info("{s}", .{req.path});
 }
 
 pub fn post(req: *Request, res: *Response, ctx: *Context) void {
@@ -96,9 +85,9 @@ pub fn post(req: *Request, res: *Response, ctx: *Context) void {
             logged_in = username.len > 0;
         }
     }
-    std.log.info("POST: username={s}, logged_in={}", .{ username, logged_in });
+    //std.log.info("POST: username={s}, logged_in={}", .{ username, logged_in });
     ctx.set("logged_in", if (logged_in) "true" else "false") catch {
-        std.log.err("Failed to set logged_in context", .{});
+        //std.log.err("Failed to set logged_in context", .{});
         return;
     };
 
@@ -109,15 +98,4 @@ pub fn post(req: *Request, res: *Response, ctx: *Context) void {
     ctx.set("cond1", if (req.query.get("cond1")) |v| v else "true") catch return;
     ctx.set("cond2", if (req.query.get("cond2")) |v| v else "false") catch return;
     ctx.set("theme", if (req.query.get("theme")) |v| v else "default") catch return;
-
-    const rendered = zttp.Template.renderTemplate(res.allocator, "src/routes/index.zmx", ctx) catch |err| {
-        std.log.err("Template error: {}", .{err});
-        res.setBody("Internal Server Error") catch return;
-        res.status = .internal_server_error;
-        return;
-    };
-
-    res.setBody(rendered) catch return;
-    res.setHeader("Content-Type", "text/html") catch return;
-    std.log.info("Served POST index endpoint", .{});
 }

@@ -9,6 +9,7 @@ pub const HandlerFn = @import("router.zig").HandlerFn;
 pub const NextFn = @import("router.zig").NextFn;
 pub const Router = @import("router.zig").Router;
 pub const Template = @import("template.zig");
+pub const Middleware = @import("middleware/mod.zig");
 
 pub const HttpMethod = enum {
     get,
@@ -33,15 +34,9 @@ pub const Route = struct {
     module_name: []const u8,
     method: HttpMethod,
     path: []const u8,
+    template_path: []const u8,
     handler: HandlerFn,
 };
-
-fn loggingMiddleware(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Request, *Response, *Context) void) void {
-    const request_id = std.fmt.allocPrint(ctx.allocator, "{d}", .{std.time.nanoTimestamp()}) catch "unknown";
-    ctx.set("request_id", request_id) catch return;
-    std.log.info("{s} {s} {s}", .{ @tagName(req.method), req.path, request_id });
-    next(req, res, ctx);
-}
 
 pub fn createServer(
     allocator: std.mem.Allocator,
@@ -78,9 +73,6 @@ pub fn createServer(
         .options = options,
     };
 
-    // Add default logging middleware
-    try bundle.use(loggingMiddleware);
-
     return bundle;
 }
 
@@ -96,6 +88,10 @@ pub const ServerBundle = struct {
             _ = thread;
         } else {
             try self.server.start();
+        }
+
+        while (true) {
+            std.time.sleep(1_000_000_000);
         }
     }
 
@@ -131,7 +127,7 @@ pub const ServerBundle = struct {
 
         for (routes) |r| {
             std.log.info("Registering route: {s} {s}", .{ @tagName(r.method), r.path });
-            try self.server.route(r.method, r.path, r.handler);
+            try self.server.route(r.module_name, r.method, r.path, r.handler, r.template_path);
         }
     }
 };

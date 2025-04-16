@@ -9,6 +9,7 @@ const MiddlewareFn = @import("router.zig").MiddlewareFn;
 const NextFn = @import("router.zig").NextFn;
 const Router = @import("router.zig").Router;
 const HttpMethod = @import("zttp.zig").HttpMethod;
+const Template = @import("template.zig");
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
@@ -36,8 +37,8 @@ pub const Server = struct {
         self.router.deinit();
     }
 
-    pub fn route(self: *Server, method: HttpMethod, path: []const u8, handler: HandlerFn) !void {
-        try self.router.add(method, path, handler);
+    pub fn route(self: *Server, module_name: []const u8, method: HttpMethod, path: []const u8, handler: HandlerFn, template_path: []const u8) !void {
+        try self.router.add(module_name, method, path, handler, template_path);
     }
 
     pub fn use(self: *Server, middleware: MiddlewareFn) !void {
@@ -69,7 +70,8 @@ pub const Server = struct {
                 null,
                 null,
             );
-            std.log.debug("Scheduled connection handling task: {d}", .{task_id});
+            _ = task_id;
+            //std.log.debug("Scheduled connection handling task: {d}", .{task_id});
         }
     }
 
@@ -147,8 +149,22 @@ pub const Server = struct {
             };
             callNext(&req, &res, &ctx);
         } else {
-            const handler = task.server.router.find(req.method, req.path, &ctx) orelse notFound;
+            const handler = task.server.router.getHandler(req.method, req.path, &ctx) orelse notFound;
             handler(&req, &res, &ctx);
+        }
+
+        const template = task.server.router.getTemplate(req.method, req.path);
+
+        if (template) |t| {
+            const rendered = Template.renderTemplate(res.allocator, t, &ctx) catch |err| {
+                std.log.err("Template error: {}", .{err});
+                res.setBody("Internal Server Error") catch return;
+                res.status = .internal_server_error;
+                return;
+            };
+
+            res.setBody(rendered) catch return;
+            res.setHeader("Content-Type", "text/html") catch return;
         }
 
         res.send(task.conn.stream) catch |err| {
@@ -182,7 +198,7 @@ pub const Server = struct {
             context_ptr.index += 1;
             mw(req, res, ctx, &callNext);
         } else {
-            const handler = context_ptr.server.router.find(req.method, req.path, ctx) orelse notFound;
+            const handler = context_ptr.server.router.getHandler(req.method, req.path, ctx) orelse notFound;
             handler(req, res, ctx);
         }
     }

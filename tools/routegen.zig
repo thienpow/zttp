@@ -17,7 +17,7 @@ pub fn main() !void {
     const routes_dir = args[1];
     const output_file = args[2];
 
-    std.debug.print("Generating routes from {s} to {s}\n", .{ routes_dir, output_file });
+    //std.debug.print("Generating routes from {s} to {s}\n", .{ routes_dir, output_file });
     try generateRoutes(allocator, routes_dir, output_file);
 }
 
@@ -46,11 +46,16 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
     var walker = try dir.walk(allocator);
     defer walker.deinit();
 
-    const http_methods = [_]HttpMethod{ .get, .post };
+    const http_methods = [_]HttpMethod{
+        .get,     .post,  .put,
+        .delete,  .patch, .head,
+        .options, .trace,
+    };
 
     var routes = std.ArrayList(struct {
         module: []const u8,
         import_path: []const u8,
+        template_path: []const u8,
         path: []const u8,
         method: HttpMethod,
         handler_name: []const u8,
@@ -59,6 +64,7 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
         for (routes.items) |r| {
             allocator.free(r.module);
             allocator.free(r.import_path);
+            allocator.free(r.template_path);
             allocator.free(r.path);
             allocator.free(r.handler_name);
         }
@@ -70,6 +76,7 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
 
         const module_name = entry.basename[0 .. entry.basename.len - 4];
 
+        // Build route path
         var path_buf = std.ArrayList(u8).init(allocator);
         defer path_buf.deinit();
         try path_buf.append('/');
@@ -104,16 +111,30 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
         const route_path = try path_buf.toOwnedSlice();
 
         for (http_methods) |method| {
-            const import_path = try allocator.dupe(u8, entry.path);
+            // Create the template path (sibling .zmx file)
+            var template_path_buf = std.ArrayList(u8).init(allocator);
+            defer template_path_buf.deinit();
+            try template_path_buf.appendSlice("src/routes/");
+            try template_path_buf.appendSlice(entry.path[0 .. entry.path.len - 4]);
+            try template_path_buf.appendSlice(".zmx");
+            const template_path = try template_path_buf.toOwnedSlice();
+
+            // Create the import path (routes/...)
+            var import_path_buf = std.ArrayList(u8).init(allocator);
+            defer import_path_buf.deinit();
+            try import_path_buf.appendSlice("routes/");
+            try import_path_buf.appendSlice(entry.path);
+            const import_path = try import_path_buf.toOwnedSlice();
+
             const method_str = @tagName(method);
             try routes.append(.{
                 .module = try allocator.dupe(u8, module_name),
                 .import_path = import_path,
+                .template_path = template_path,
                 .path = try allocator.dupe(u8, route_path),
                 .method = method,
                 .handler_name = try allocator.dupe(u8, method_str),
             });
-            std.debug.print("Found route: {s} {s} ({s}) [import: routes/{s}]\n", .{ method_str, route_path, module_name, import_path });
         }
 
         allocator.free(route_path);
@@ -136,6 +157,7 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
         \\        for (routes.items) |r| {
         \\            allocator.free(r.module_name);
         \\            allocator.free(r.path);
+        \\            allocator.free(r.template_path);
         \\        }
         \\        routes.deinit();
         \\    }
@@ -146,7 +168,7 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
         var buf = std.ArrayList(u8).init(allocator);
         defer buf.deinit();
         try buf.writer().writeAll(
-            \\    if (@hasDecl(@import("routes/
+            \\    if (@hasDecl(@import("
         );
         try buf.appendSlice(route.import_path);
         try buf.appendSlice(
@@ -171,7 +193,12 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
         try buf.appendSlice(route.path);
         try buf.appendSlice(
             \\"),
-            \\            .handler = @import("routes/
+            \\            .template_path = try allocator.dupe(u8, "
+        );
+        try buf.appendSlice(route.template_path);
+        try buf.appendSlice(
+            \\"),
+            \\            .handler = @import("
         );
         try buf.appendSlice(route.import_path);
         try buf.appendSlice(
@@ -192,5 +219,5 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
         \\}
     );
 
-    std.debug.print("Generated {s} with {} routes\n", .{ output_file, routes.items.len });
+    //std.debug.print("Generated {s} with {} routes\n", .{ output_file, routes.items.len });
 }

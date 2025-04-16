@@ -96,11 +96,11 @@ pub const ThreadPool = struct {
             };
 
             const ctx = try allocator.create(Context);
-            std.debug.print("Task.create: Allocated ctx at {*}\n", .{ctx});
+            //std.debug.print("Task.create: Allocated ctx at {*}\n", .{ctx});
             ctx.* = .{ .f = FuncType, .a = arg_val };
 
             const task = try allocator.create(Task);
-            std.debug.print("Task.create: Allocated task at {*}, id: {d}\n", .{ task, id_val });
+            //std.debug.print("Task.create: Allocated task at {*}, id: {d}\n", .{ task, id_val });
             task.* = .{
                 .func = Context.run,
                 .arg = ctx,
@@ -174,7 +174,7 @@ pub const ThreadPool = struct {
 
     /// Initialize a new thread pool without starting threads
     pub fn init(allocator: Allocator, options: Options) !ThreadPool {
-        std.debug.print("ThreadPool.init: Starting at {d} ns\n", .{std.time.nanoTimestamp()});
+        //std.debug.print("ThreadPool.init: Starting at {d} ns\n", .{std.time.nanoTimestamp()});
         const threads = try allocator.alloc(std.Thread, options.max_threads);
         const tasks = std.PriorityQueue(*Task, void, compareTaskPriority).init(allocator, {});
         const all_tasks = std.AutoHashMap(u64, TaskStatus).init(allocator);
@@ -200,32 +200,32 @@ pub const ThreadPool = struct {
 
     /// Start worker threads after initialization
     pub fn startWorkers(self: *ThreadPool, num_threads: usize) !void {
-        std.debug.print("ThreadPool.startWorkers: Starting {d} threads\n", .{num_threads});
+        //std.debug.print("ThreadPool.startWorkers: Starting {d} threads\n", .{num_threads});
         const count = @min(num_threads, self.max_threads);
         var i: usize = 0;
         while (i < count) : (i += 1) {
-            std.debug.print("ThreadPool.startWorkers: Spawning thread {d}/{d}\n", .{ i + 1, count });
+            //std.debug.print("ThreadPool.startWorkers: Spawning thread {d}/{d}\n", .{ i + 1, count });
             const thread = try std.Thread.spawn(.{}, workerLoop, .{self});
             self.threads[i] = thread;
         }
         self.spawned_threads = count;
-        std.debug.print("ThreadPool.startWorkers: Completed\n", .{});
+        //std.debug.print("ThreadPool.startWorkers: Completed\n", .{});
     }
 
     /// Clean up all resources associated with the thread pool
     pub fn deinit(self: *ThreadPool) void {
-        std.debug.print("ThreadPool.deinit() started at {d} ns\n", .{std.time.nanoTimestamp()});
+        //std.debug.print("ThreadPool.deinit() started at {d} ns\n", .{std.time.nanoTimestamp()});
 
         self.running.store(false, .monotonic);
         self.cond.broadcast();
 
         while (self.active_threads.load(.monotonic) > 0) {
-            std.debug.print("ThreadPool.deinit: Waiting for {d} active threads\n", .{self.active_threads.load(.monotonic)});
+            //std.debug.print("ThreadPool.deinit: Waiting for {d} active threads\n", .{self.active_threads.load(.monotonic)});
             std.time.sleep(10 * std.time.ns_per_ms);
         }
 
         for (self.threads[0..self.spawned_threads]) |thread| {
-            std.debug.print("ThreadPool.deinit: Joining thread {d}\n", .{thread.getHandle()});
+            //std.debug.print("ThreadPool.deinit: Joining thread {d}\n", .{thread.getHandle()});
             thread.join();
         }
 
@@ -234,7 +234,7 @@ pub const ThreadPool = struct {
 
         while (self.tasks.count() > 0) {
             const task = self.tasks.remove();
-            std.debug.print("ThreadPool.deinit: Cleaning task {d}, ptr: {*}\n", .{ task.id, task });
+            //std.debug.print("ThreadPool.deinit: Cleaning task {d}, ptr: {*}\n", .{ task.id, task });
             self.all_tasks.put(task.id, .Failed) catch |err| {
                 std.debug.print("ThreadPool.deinit: Failed to update task {d} status: {}\n", .{ task.id, err });
             };
@@ -244,7 +244,7 @@ pub const ThreadPool = struct {
         var pending_it = self.pending_tasks.iterator();
         while (pending_it.next()) |entry| {
             const task = entry.value_ptr.*;
-            std.debug.print("ThreadPool.deinit: Cleaning pending task {d}, ptr: {*}\n", .{ entry.key_ptr.*, task });
+            //std.debug.print("ThreadPool.deinit: Cleaning pending task {d}, ptr: {*}\n", .{ entry.key_ptr.*, task });
             self.all_tasks.put(entry.key_ptr.*, .Failed) catch |err| {
                 std.debug.print("ThreadPool.deinit: Failed to update pending task {d} status: {}\n", .{ entry.key_ptr.*, err });
             };
@@ -256,7 +256,7 @@ pub const ThreadPool = struct {
         self.tasks.deinit();
         self.allocator.free(self.threads);
 
-        std.debug.print("ThreadPool.deinit() completed at {d} ns\n", .{std.time.nanoTimestamp()});
+        //std.debug.print("ThreadPool.deinit() completed at {d} ns\n", .{std.time.nanoTimestamp()});
     }
 
     /// Check if all dependencies for a task have been met
@@ -351,7 +351,7 @@ pub const ThreadPool = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        std.debug.print("Schedule called. Pool running: {}\n", .{self.running.load(.monotonic)});
+        //std.debug.print("Schedule called. Pool running: {}\n", .{self.running.load(.monotonic)});
 
         if (!self.running.load(.monotonic)) {
             if (dependencies) |deps| self.allocator.free(deps);
@@ -387,16 +387,16 @@ pub const ThreadPool = struct {
             if (self.areDependenciesMetLocked(task.dependencies.?)) {
                 try self.all_tasks.put(task_id, .Running);
                 try self.tasks.add(task);
-                std.debug.print("Schedule: Task {d} dependencies met, added to tasks\n", .{task_id});
+                //std.debug.print("Schedule: Task {d} dependencies met, added to tasks\n", .{task_id});
                 self.cond.signal();
             } else {
                 try self.pending_tasks.put(task_id, task);
-                std.debug.print("Schedule: Task {d} pending with dependencies\n", .{task_id});
+                //std.debug.print("Schedule: Task {d} pending with dependencies\n", .{task_id});
             }
         } else {
             try self.all_tasks.put(task_id, .Running);
             try self.tasks.add(task);
-            std.debug.print("Schedule: Task {d} added to tasks\n", .{task_id});
+            //std.debug.print("Schedule: Task {d} added to tasks\n", .{task_id});
             self.cond.signal();
         }
 
@@ -478,15 +478,15 @@ pub const ThreadPool = struct {
         defer _ = self.active_threads.fetchSub(1, .monotonic);
 
         const thread_id = std.Thread.getCurrentId();
-        std.debug.print("workerLoop: Started thread {d}, running: {any}\n", .{ thread_id, self.running.load(.monotonic) });
+        //std.debug.print("workerLoop: Started thread {d}, running: {any}\n", .{ thread_id, self.running.load(.monotonic) });
 
         while (true) {
             self.mutex.lock();
             const is_running = self.running.load(.monotonic);
-            std.debug.print("workerLoop: Thread {d} locked mutex, running: {any}, tasks len: {d}\n", .{ thread_id, is_running, self.tasks.count() });
+            //std.debug.print("workerLoop: Thread {d} locked mutex, running: {any}, tasks len: {d}\n", .{ thread_id, is_running, self.tasks.count() });
 
             if (!is_running and self.tasks.count() == 0) {
-                std.debug.print("workerLoop: Thread {d} shutting down (not running, no tasks)\n", .{thread_id});
+                //std.debug.print("workerLoop: Thread {d} shutting down (not running, no tasks)\n", .{thread_id});
                 self.mutex.unlock();
                 break;
             }
@@ -500,9 +500,7 @@ pub const ThreadPool = struct {
                 const task = entry.value_ptr.*;
                 if (task.dep_timeout_ns) |dep_timeout| {
                     if (now - task.queued_at > dep_timeout) {
-                        std.debug.print("workerLoop: Thread {d} task {d} dependency timeout expired (elapsed: {d} ns, timeout: {d} ns)\n", .{
-                            thread_id, task_id, now - task.queued_at, dep_timeout,
-                        });
+                        //std.debug.print("workerLoop: Thread {d} task {d} dependency timeout expired (elapsed: {d} ns, timeout: {d} ns)\n", .{ thread_id, task_id, now - task.queued_at, dep_timeout });
                         tasks_to_fail.append(task_id) catch {
                             std.debug.print("workerLoop: Thread {d} failed to append task {d} to fail list\n", .{ thread_id, task_id });
                         };
@@ -517,37 +515,37 @@ pub const ThreadPool = struct {
                     self.all_tasks.put(task_id, .Failed) catch {
                         std.debug.print("workerLoop: Thread {d} failed to update status for task {d}\n", .{ thread_id, task_id });
                     };
-                    std.debug.print("workerLoop: Thread {d} marked task {d} as Failed, ptr: {*}\n", .{ thread_id, task_id, task });
+                    //std.debug.print("workerLoop: Thread {d} marked task {d} as Failed, ptr: {*}\n", .{ thread_id, task_id, task });
                     task.deinit(self.allocator); // Free the task here
                 }
             }
 
             var current_task: ?*ThreadPool.Task = null;
             if (self.tasks.count() > 0 and self.tasks.count() <= self.max_tasks) {
-                std.debug.print("workerLoop: Thread {d} found {d} tasks\n", .{ thread_id, self.tasks.count() });
+                //std.debug.print("workerLoop: Thread {d} found {d} tasks\n", .{ thread_id, self.tasks.count() });
                 const peeked_task = self.tasks.peek();
                 if (peeked_task) |task| {
                     if (task.id > 1_000_000_000) {
-                        std.debug.print("workerLoop: Thread {d} removing invalid task id {d}\n", .{ thread_id, task.id });
+                        //std.debug.print("workerLoop: Thread {d} removing invalid task id {d}\n", .{ thread_id, task.id });
                         current_task = self.tasks.remove();
                         _ = self.all_tasks.put(current_task.?.id, .Failed) catch {};
                         current_task.?.deinit(self.allocator);
                     } else if (task.timeout_ns) |timeout| {
                         if (now - task.queued_at > timeout) {
-                            std.debug.print("workerLoop: Thread {d} marking task {d} as timed out\n", .{ thread_id, task.id });
+                            //std.debug.print("workerLoop: Thread {d} marking task {d} as timed out\n", .{ thread_id, task.id });
                             current_task = self.tasks.remove();
                             _ = self.all_tasks.put(current_task.?.id, .Failed) catch {};
                         } else {
                             current_task = self.tasks.remove();
-                            std.debug.print("workerLoop: Thread {d} selected task {d} with priority {d}\n", .{ thread_id, current_task.?.id, current_task.?.priority });
+                            //std.debug.print("workerLoop: Thread {d} selected task {d} with priority {d}\n", .{ thread_id, current_task.?.id, current_task.?.priority });
                         }
                     } else {
                         current_task = self.tasks.remove();
-                        std.debug.print("workerLoop: Thread {d} selected task {d} with priority {d}\n", .{ thread_id, current_task.?.id, current_task.?.priority });
+                        //std.debug.print("workerLoop: Thread {d} selected task {d} with priority {d}\n", .{ thread_id, current_task.?.id, current_task.?.priority });
                     }
                 }
             } else if (self.tasks.count() > self.max_tasks) {
-                std.debug.print("workerLoop: Thread {d} invalid task count {d}, resetting\n", .{ thread_id, self.tasks.count() });
+                //std.debug.print("workerLoop: Thread {d} invalid task count {d}, resetting\n", .{ thread_id, self.tasks.count() });
                 while (self.tasks.count() > 0) {
                     const task = self.tasks.remove();
                     _ = self.all_tasks.put(task.id, .Failed) catch {};
@@ -556,17 +554,15 @@ pub const ThreadPool = struct {
             }
 
             if (current_task) |task| {
-                std.debug.print("workerLoop: Thread {d} unlocking mutex for task {d}\n", .{ thread_id, task.id });
+                //std.debug.print("workerLoop: Thread {d} unlocking mutex for task {d}\n", .{ thread_id, task.id });
                 self.mutex.unlock();
 
                 var result = ThreadPool.TaskResult{};
                 const start_time = std.time.nanoTimestamp();
-                std.debug.print("workerLoop: Thread {d} executing task {d}\n", .{ thread_id, task.id });
+                //std.debug.print("workerLoop: Thread {d} executing task {d}\n", .{ thread_id, task.id });
                 task.func(task.arg, &result);
                 const end_time = std.time.nanoTimestamp();
-                std.debug.print("workerLoop: Thread {d} task {d} executed, success: {any}, retry: {any}\n", .{
-                    thread_id, task.id, result.success, result.retry,
-                });
+                //std.debug.print("workerLoop: Thread {d} task {d} executed, success: {any}, retry: {any}\n", .{ thread_id, task.id, result.success, result.retry });
 
                 self.mutex.lock();
                 task.completed.store(true, .monotonic);
@@ -577,9 +573,7 @@ pub const ThreadPool = struct {
                     task.retries -= 1;
                     task.completed.store(false, .monotonic);
                     task.queued_at = @as(i64, @intCast(std.time.nanoTimestamp()));
-                    std.debug.print("workerLoop: Thread {d} task {d} retry requested, retries left: {d}\n", .{
-                        thread_id, task.id, task.retries,
-                    });
+                    //std.debug.print("workerLoop: Thread {d} task {d} retry requested, retries left: {d}\n", .{ thread_id, task.id, task.retries });
                     if (task.retry_delay_ns > 0) {
                         self.mutex.unlock();
                         std.time.sleep(task.retry_delay_ns);
@@ -608,7 +602,7 @@ pub const ThreadPool = struct {
                         return;
                     };
                     self.cond.signal();
-                    std.debug.print("workerLoop: Thread {d} task {d} requeued for retry\n", .{ thread_id, task.id });
+                    //std.debug.print("workerLoop: Thread {d} task {d} requeued for retry\n", .{ thread_id, task.id });
                 } else {
                     status = if (self.all_tasks.get(task.id) == .Failed)
                         .Failed
@@ -626,18 +620,18 @@ pub const ThreadPool = struct {
                         status = .Failed;
                         _ = self.all_tasks.put(task.id, .Failed) catch {};
                     };
-                    std.debug.print("workerLoop: Thread {d} task {d} status: {s}\n", .{ thread_id, task.id, @tagName(status) });
+                    //std.debug.print("workerLoop: Thread {d} task {d} status: {s}\n", .{ thread_id, task.id, @tagName(status) });
                     self.checkDependentsLocked(task.id);
                     task.deinit(self.allocator);
                 }
                 self.mutex.unlock();
             } else {
-                std.debug.print("workerLoop: Thread {d} no tasks, waiting\n", .{thread_id});
+                //std.debug.print("workerLoop: Thread {d} no tasks, waiting\n", .{thread_id});
                 self.cond.wait(&self.mutex);
-                std.debug.print("workerLoop: Thread {d} woke up from wait\n", .{thread_id});
+                //std.debug.print("workerLoop: Thread {d} woke up from wait\n", .{thread_id});
                 self.mutex.unlock();
             }
         }
-        std.debug.print("workerLoop: Thread {d} exiting\n", .{thread_id});
+        //std.debug.print("workerLoop: Thread {d} exiting\n", .{thread_id});
     }
 };

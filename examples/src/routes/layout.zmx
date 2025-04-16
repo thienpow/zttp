@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>
+        #block title
+            {{ site_title // "Default Website Title" }} <!-- Default title if block not overridden -->
+        #endblock
+    </title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        header, footer { background-color: #eee; padding: 10px; margin-bottom: 15px; }
+        main { border: 1px solid #ccc; padding: 15px; }
+        nav a { margin-right: 10px; }
+    </style>
+    #block head_extra
+        <!-- Child templates can add extra CSS links, meta tags here -->
+    #endblock
+</head>
+<body>
+
+    <header>
+        <h1>{{ site_name // "My Awesome Site" }}</h1>
+        <nav>
+            <a href="/">Home</a>
+            <a href="/about">About</a>
+            #if logged_in
+                <a href="/profile">Profile ({{ username }})</a>
+                <a href="/logout">Logout</a>
+            #else
+                <a href="/login">Login</a>
+            #endif
+        </nav>
+    </header>
+
+    <main>
+        #block content
+            <h2>Default Content Area</h2>
+            <p>This content appears if the child template does not define a 'content' block.</p>
+        #endblock
+    </main>
+
+    <footer>
+        <p>&copy; 2024 {{ site_name // "My Awesome Site" }}. All rights reserved.</p>
+        #block footer_extra
+            <!-- Optional extra footer content -->
+        #endblock
+    </footer>
+
+</body>
+</html>

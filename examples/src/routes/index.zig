@@ -8,6 +8,10 @@ pub fn get(req: *Request, res: *Response, ctx: *Context) void {
     res.status = .ok;
 
     const request_id = ctx.get("request_id");
+    ctx.set("site_name", "My Awesome Site") catch return;
+    ctx.set("page_title", "Home Page") catch return;
+    ctx.set("page_heading", "Welcome!") catch return;
+
     const logged_in = request_id != null;
     //std.log.info("GET: request_id={?s}, logged_in={}", .{ request_id, logged_in });
     ctx.set("logged_in", if (logged_in) "true" else "false") catch {

@@ -230,5 +230,293 @@ pub fn getRoutes(allocator: std.mem.Allocator) ![]const Route {
             .handler = @import("routes/api/json.zig").trace,
         });
     }
+    if (@hasDecl(@import("routes/profile/index.zig"), "get")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "index"),
+            .method = .get,
+            .path = try allocator.dupe(u8, "/profile"),
+            .template_path = try allocator.dupe(u8, "src/routes/profile/index.zmx"),
+            .handler = @import("routes/profile/index.zig").get,
+        });
+    }
+    if (@hasDecl(@import("routes/profile/index.zig"), "post")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "index"),
+            .method = .post,
+            .path = try allocator.dupe(u8, "/profile"),
+            .template_path = try allocator.dupe(u8, "src/routes/profile/index.zmx"),
+            .handler = @import("routes/profile/index.zig").post,
+        });
+    }
+    if (@hasDecl(@import("routes/profile/index.zig"), "put")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "index"),
+            .method = .put,
+            .path = try allocator.dupe(u8, "/profile"),
+            .template_path = try allocator.dupe(u8, "src/routes/profile/index.zmx"),
+            .handler = @import("routes/profile/index.zig").put,
+        });
+    }
+    if (@hasDecl(@import("routes/profile/index.zig"), "delete")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "index"),
+            .method = .delete,
+            .path = try allocator.dupe(u8, "/profile"),
+            .template_path = try allocator.dupe(u8, "src/routes/profile/index.zmx"),
+            .handler = @import("routes/profile/index.zig").delete,
+        });
+    }
+    if (@hasDecl(@import("routes/profile/index.zig"), "patch")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "index"),
+            .method = .patch,
+            .path = try allocator.dupe(u8, "/profile"),
+            .template_path = try allocator.dupe(u8, "src/routes/profile/index.zmx"),
+            .handler = @import("routes/profile/index.zig").patch,
+        });
+    }
+    if (@hasDecl(@import("routes/profile/index.zig"), "head")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "index"),
+            .method = .head,
+            .path = try allocator.dupe(u8, "/profile"),
+            .template_path = try allocator.dupe(u8, "src/routes/profile/index.zmx"),
+            .handler = @import("routes/profile/index.zig").head,
+        });
+    }
+    if (@hasDecl(@import("routes/profile/index.zig"), "options")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "index"),
+            .method = .options,
+            .path = try allocator.dupe(u8, "/profile"),
+            .template_path = try allocator.dupe(u8, "src/routes/profile/index.zmx"),
+            .handler = @import("routes/profile/index.zig").options,
+        });
+    }
+    if (@hasDecl(@import("routes/profile/index.zig"), "trace")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "index"),
+            .method = .trace,
+            .path = try allocator.dupe(u8, "/profile"),
+            .template_path = try allocator.dupe(u8, "src/routes/profile/index.zmx"),
+            .handler = @import("routes/profile/index.zig").trace,
+        });
+    }
+    if (@hasDecl(@import("routes/about.zig"), "get")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "about"),
+            .method = .get,
+            .path = try allocator.dupe(u8, "/about"),
+            .template_path = try allocator.dupe(u8, "src/routes/about.zmx"),
+            .handler = @import("routes/about.zig").get,
+        });
+    }
+    if (@hasDecl(@import("routes/about.zig"), "post")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "about"),
+            .method = .post,
+            .path = try allocator.dupe(u8, "/about"),
+            .template_path = try allocator.dupe(u8, "src/routes/about.zmx"),
+            .handler = @import("routes/about.zig").post,
+        });
+    }
+    if (@hasDecl(@import("routes/about.zig"), "put")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "about"),
+            .method = .put,
+            .path = try allocator.dupe(u8, "/about"),
+            .template_path = try allocator.dupe(u8, "src/routes/about.zmx"),
+            .handler = @import("routes/about.zig").put,
+        });
+    }
+    if (@hasDecl(@import("routes/about.zig"), "delete")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "about"),
+            .method = .delete,
+            .path = try allocator.dupe(u8, "/about"),
+            .template_path = try allocator.dupe(u8, "src/routes/about.zmx"),
+            .handler = @import("routes/about.zig").delete,
+        });
+    }
+    if (@hasDecl(@import("routes/about.zig"), "patch")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "about"),
+            .method = .patch,
+            .path = try allocator.dupe(u8, "/about"),
+            .template_path = try allocator.dupe(u8, "src/routes/about.zmx"),
+            .handler = @import("routes/about.zig").patch,
+        });
+    }
+    if (@hasDecl(@import("routes/about.zig"), "head")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "about"),
+            .method = .head,
+            .path = try allocator.dupe(u8, "/about"),
+            .template_path = try allocator.dupe(u8, "src/routes/about.zmx"),
+            .handler = @import("routes/about.zig").head,
+        });
+    }
+    if (@hasDecl(@import("routes/about.zig"), "options")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "about"),
+            .method = .options,
+            .path = try allocator.dupe(u8, "/about"),
+            .template_path = try allocator.dupe(u8, "src/routes/about.zmx"),
+            .handler = @import("routes/about.zig").options,
+        });
+    }
+    if (@hasDecl(@import("routes/about.zig"), "trace")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "about"),
+            .method = .trace,
+            .path = try allocator.dupe(u8, "/about"),
+            .template_path = try allocator.dupe(u8, "src/routes/about.zmx"),
+            .handler = @import("routes/about.zig").trace,
+        });
+    }
+    if (@hasDecl(@import("routes/login.zig"), "get")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "login"),
+            .method = .get,
+            .path = try allocator.dupe(u8, "/login"),
+            .template_path = try allocator.dupe(u8, "src/routes/login.zmx"),
+            .handler = @import("routes/login.zig").get,
+        });
+    }
+    if (@hasDecl(@import("routes/login.zig"), "post")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "login"),
+            .method = .post,
+            .path = try allocator.dupe(u8, "/login"),
+            .template_path = try allocator.dupe(u8, "src/routes/login.zmx"),
+            .handler = @import("routes/login.zig").post,
+        });
+    }
+    if (@hasDecl(@import("routes/login.zig"), "put")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "login"),
+            .method = .put,
+            .path = try allocator.dupe(u8, "/login"),
+            .template_path = try allocator.dupe(u8, "src/routes/login.zmx"),
+            .handler = @import("routes/login.zig").put,
+        });
+    }
+    if (@hasDecl(@import("routes/login.zig"), "delete")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "login"),
+            .method = .delete,
+            .path = try allocator.dupe(u8, "/login"),
+            .template_path = try allocator.dupe(u8, "src/routes/login.zmx"),
+            .handler = @import("routes/login.zig").delete,
+        });
+    }
+    if (@hasDecl(@import("routes/login.zig"), "patch")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "login"),
+            .method = .patch,
+            .path = try allocator.dupe(u8, "/login"),
+            .template_path = try allocator.dupe(u8, "src/routes/login.zmx"),
+            .handler = @import("routes/login.zig").patch,
+        });
+    }
+    if (@hasDecl(@import("routes/login.zig"), "head")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "login"),
+            .method = .head,
+            .path = try allocator.dupe(u8, "/login"),
+            .template_path = try allocator.dupe(u8, "src/routes/login.zmx"),
+            .handler = @import("routes/login.zig").head,
+        });
+    }
+    if (@hasDecl(@import("routes/login.zig"), "options")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "login"),
+            .method = .options,
+            .path = try allocator.dupe(u8, "/login"),
+            .template_path = try allocator.dupe(u8, "src/routes/login.zmx"),
+            .handler = @import("routes/login.zig").options,
+        });
+    }
+    if (@hasDecl(@import("routes/login.zig"), "trace")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "login"),
+            .method = .trace,
+            .path = try allocator.dupe(u8, "/login"),
+            .template_path = try allocator.dupe(u8, "src/routes/login.zmx"),
+            .handler = @import("routes/login.zig").trace,
+        });
+    }
+    if (@hasDecl(@import("routes/logout.zig"), "get")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "logout"),
+            .method = .get,
+            .path = try allocator.dupe(u8, "/logout"),
+            .template_path = try allocator.dupe(u8, "src/routes/logout.zmx"),
+            .handler = @import("routes/logout.zig").get,
+        });
+    }
+    if (@hasDecl(@import("routes/logout.zig"), "post")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "logout"),
+            .method = .post,
+            .path = try allocator.dupe(u8, "/logout"),
+            .template_path = try allocator.dupe(u8, "src/routes/logout.zmx"),
+            .handler = @import("routes/logout.zig").post,
+        });
+    }
+    if (@hasDecl(@import("routes/logout.zig"), "put")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "logout"),
+            .method = .put,
+            .path = try allocator.dupe(u8, "/logout"),
+            .template_path = try allocator.dupe(u8, "src/routes/logout.zmx"),
+            .handler = @import("routes/logout.zig").put,
+        });
+    }
+    if (@hasDecl(@import("routes/logout.zig"), "delete")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "logout"),
+            .method = .delete,
+            .path = try allocator.dupe(u8, "/logout"),
+            .template_path = try allocator.dupe(u8, "src/routes/logout.zmx"),
+            .handler = @import("routes/logout.zig").delete,
+        });
+    }
+    if (@hasDecl(@import("routes/logout.zig"), "patch")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "logout"),
+            .method = .patch,
+            .path = try allocator.dupe(u8, "/logout"),
+            .template_path = try allocator.dupe(u8, "src/routes/logout.zmx"),
+            .handler = @import("routes/logout.zig").patch,
+        });
+    }
+    if (@hasDecl(@import("routes/logout.zig"), "head")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "logout"),
+            .method = .head,
+            .path = try allocator.dupe(u8, "/logout"),
+            .template_path = try allocator.dupe(u8, "src/routes/logout.zmx"),
+            .handler = @import("routes/logout.zig").head,
+        });
+    }
+    if (@hasDecl(@import("routes/logout.zig"), "options")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "logout"),
+            .method = .options,
+            .path = try allocator.dupe(u8, "/logout"),
+            .template_path = try allocator.dupe(u8, "src/routes/logout.zmx"),
+            .handler = @import("routes/logout.zig").options,
+        });
+    }
+    if (@hasDecl(@import("routes/logout.zig"), "trace")) {
+        try routes.append(Route{
+            .module_name = try allocator.dupe(u8, "logout"),
+            .method = .trace,
+            .path = try allocator.dupe(u8, "/logout"),
+            .template_path = try allocator.dupe(u8, "src/routes/logout.zmx"),
+            .handler = @import("routes/logout.zig").trace,
+        });
+    }
     return routes.toOwnedSlice();
 }

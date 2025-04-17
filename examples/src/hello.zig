@@ -15,7 +15,8 @@ pub fn main() !void {
     defer bundle.deinit();
 
     // Add default logging middleware
-    try bundle.use(zttp.Middleware.Logger.log);
+    try bundle.use(zttp.Middleware.log);
+    try bundle.use(zttp.Middleware.htmx);
 
     // Load user routes
     try bundle.loadRoutes(@import("generated_routes.zig").getRoutes);

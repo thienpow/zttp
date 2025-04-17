@@ -6,38 +6,46 @@
 
 #block head_extra
     <meta name="description" content="Welcome to the homepage of our awesome site!">
-    <link rel="stylesheet" href="/css/home-specific.css"> <!-- Example specific CSS -->
+    <!-- <link rel="stylesheet" href="/css/home-specific.css"> --> <!-- Example specific CSS -->
 #endblock
 
 #block content
     <h2>{{ page_heading // "Welcome!" }}</h2>
 
-    #if message
-        <p style="color: green;">{{ message }}</p>
-    #endif
-
     <p>This is the main content specific to the <strong>index page</strong>.</p>
     <p>It replaces the default content defined in the layout's 'content' block.</p>
 
-    #if logged_in
-        <p>You are logged in as {{ username }}.</p>
+    #if logged_in == "true" // Compare string value
+        <p>You are logged in as <strong>{{ username }}</strong>.</p>
         <h3>Your Items:</h3>
-        #if items
+        #if items // Assuming items is JSON string "[...]" - real parsing needed for complex use
+             <p><em>(Items rendering from context string: {{ items }})</em></p>
+            <!-- Basic list display (won't parse JSON string here) -->
+            <!-- For real use, parse JSON in handler and pass structured data -->
+            <!-- or enhance template engine -->
             <ul>
-            #for item in items
-                <li>{{ item }}</li>
-            #endfor
+                <li>Item 1 (placeholder)</li>
+                <li>Item 2 (placeholder)</li>
             </ul>
         #else
             <p>You have no items.</p>
         #endif
     #else
-        <p>Please <a href="/login">log in</a> to see personalized content.</p>
+        <p>Please <a href="/login" hx-target="main" hx-boost="true">log in</a> to see personalized content.</p>
     #endif
 
-    <p>Here's some more static content for the index page.</p>
+    <hr>
+    <p><em>(Debug info from context - might be removed in production)</em></p>
+    <ul>
+        <li>Role: {{ role // "not set" }}</li>
+        <li>Show: {{ show // "not set" }}</li>
+        <li>Cond1: {{ cond1 // "not set" }}</li>
+        <li>Cond2: {{ cond2 // "not set" }}</li>
+        <li>Theme: {{ theme // "not set" }}</li>
+    </ul>
+
 #endblock
 
 #block footer_extra
-    <p>Home page footer info.</p>
+    <p>Home page specific footer info.</p>
 #endblock

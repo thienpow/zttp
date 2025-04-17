@@ -1,3 +1,4 @@
+// src/server.zig
 const std = @import("std");
 const Context = @import("context.zig").Context;
 const Request = @import("request.zig").Request;
@@ -9,7 +10,7 @@ const MiddlewareFn = @import("router.zig").MiddlewareFn;
 const NextFn = @import("router.zig").NextFn;
 const Router = @import("router.zig").Router;
 const HttpMethod = @import("zttp.zig").HttpMethod;
-const Template = @import("template.zig");
+const Template = @import("template/main.zig");
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
@@ -20,6 +21,10 @@ pub const Server = struct {
     pool: *ThreadPool,
 
     pub fn init(allocator: std.mem.Allocator, port: u16, pool: *ThreadPool) Server {
+        Template.initTemplateCache(allocator) catch |err| {
+            std.log.err("Failed to initialize template cache: {}", .{err});
+            @panic("Template cache initialization failed");
+        };
         return .{
             .allocator = allocator,
             .listener = null,
@@ -35,6 +40,7 @@ pub const Server = struct {
             listener.deinit();
         }
         self.router.deinit();
+        Template.deinitTemplateCache();
     }
 
     pub fn route(self: *Server, module_name: []const u8, method: HttpMethod, path: []const u8, handler: HandlerFn, template_path: []const u8) !void {

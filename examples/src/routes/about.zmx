@@ -1,0 +1,12 @@
+#extends "layout.zmx"
+
+#block title
+    {{ page_title // "About" }} - {{ site_name // "My Site" }}
+#endblock
+
+#block content
+    <h2>About Us</h2>
+    <p>This is the about page for {{ site_name // "our website" }}.</p>
+    <p>We are demonstrating the features of the zttp web framework for Zig.</p>
+    <p>This page uses the default layout.</p>
+#endblock

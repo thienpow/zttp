@@ -1,0 +1,31 @@
+#extends "layout.zmx"
+
+#block title
+    {{ page_title // "Login" }} - {{ site_name // "My Site" }}
+#endblock
+
+#block content
+    <h2>Login</h2>
+
+    #if error_message
+        <p style="color: red;"><strong>Error:</strong> {{ error_message }}</p>
+    #endif
+
+    <form action="/login" method="post">
+        <div>
+            <label for="username">Username:</label>
+            <input type="text" id="username" name="username" value="{{ submitted_username //  }}" required>
+            (Hint: admin)
+        </div>
+        <br>
+        <div>
+            <label for="password">Password:</label>
+            <input type="password" id="password" name="password" required>
+            (Hint: password)
+        </div>
+        <br>
+        <div>
+            <button type="submit">Log In</button>
+        </div>
+    </form>
+#endblock

@@ -3,16 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <title>
         #block title
-            {{ site_title // "Default Website Title" }} <!-- Default title if block not overridden -->
+            {{ page_title // "Untitled Page" }} - {{ site_name // "My Site" }}
         #endblock
     </title>
     <style>
-        body { font-family: sans-serif; margin: 20px; }
-        header, footer { background-color: #eee; padding: 10px; margin-bottom: 15px; }
-        main { border: 1px solid #ccc; padding: 15px; }
-        nav a { margin-right: 10px; }
+        body { font-family: sans-serif; margin: 20px; line-height: 1.6; }
+        header, footer { background-color: #f0f0f0; padding: 15px; margin-bottom: 20px; border-radius: 5px; }
+        header h1 { margin: 0; }
+        main { border: 1px solid #ccc; padding: 20px; border-radius: 5px; }
+        nav ul { list-style: none; padding: 0; margin: 10px 0 0 0; }
+        nav ul li { display: inline; margin-right: 15px; }
+        nav a { text-decoration: none; color: #007bff; }
+        nav a:hover { text-decoration: underline; }
+        footer { margin-top: 20px; font-size: 0.9em; color: #555; }
+        .flash-message { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
+        .flash-success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .flash-error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
     </style>
     #block head_extra
         <!-- Child templates can add extra CSS links, meta tags here -->
@@ -23,18 +32,29 @@
     <header>
         <h1>{{ site_name // "My Awesome Site" }}</h1>
         <nav>
-            <a href="/">Home</a>
-            <a href="/about">About</a>
-            #if logged_in
-                <a href="/profile">Profile ({{ username }})</a>
-                <a href="/logout">Logout</a>
-            #else
-                <a href="/login">Login</a>
-            #endif
+             <ul>
+                <li><a href="/" hx-target="main" hx-boost="true">Home</a></li>
+                <li><a href="/about" hx-target="main" hx-boost="true">About</a></li>
+                <li><a href="/users/123" hx-target="main" hx-boost="true">User Example (ID 123)</a></li>
+                <li><a href="/api/json" hx-target="main" hx-boost="true">JSON API</a></li>
+                #if logged_in == "true" // Compare string value set in context
+                    <li><a href="/profile" hx-target="main" hx-boost="true">Profile ({{ username }})</a></li>
+                    <li><a href="/logout" hx-target="main" hx-boost="true">Logout</a></li>
+                #else
+                    <li><a href="/login" hx-target="main" hx-boost="true">Login</a></li>
+                #endif
+            </ul>
         </nav>
     </header>
 
     <main>
+        #if message // Display flash messages (e.g., after login)
+            <div class="flash-message flash-success">{{ message }}</div>
+        #endif
+        #if error_message // Display error messages (e.g., login failure)
+             <div class="flash-message flash-error">{{ error_message }}</div>
+        #endif
+
         #block content
             <h2>Default Content Area</h2>
             <p>This content appears if the child template does not define a 'content' block.</p>

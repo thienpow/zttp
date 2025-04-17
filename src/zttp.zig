@@ -8,7 +8,7 @@ pub const MiddlewareFn = @import("router.zig").MiddlewareFn;
 pub const HandlerFn = @import("router.zig").HandlerFn;
 pub const NextFn = @import("router.zig").NextFn;
 pub const Router = @import("router.zig").Router;
-pub const Template = @import("template.zig");
+pub const Template = @import("template/main.zig");
 pub const Middleware = @import("middleware/mod.zig");
 
 pub const HttpMethod = enum {

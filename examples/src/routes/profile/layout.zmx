@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>
+        #block title
+            Profile Section - {{ site_name // "My Site" }}
+        #endblock
+    </title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background-color: #e9ecef; }
+        .profile-container { display: flex; min-height: 100vh; }
+        .profile-sidebar { width: 220px; background-color: #343a40; color: #fff; padding: 20px; }
+        .profile-sidebar h3 { color: #adb5bd; margin-top: 0; }
+        .profile-sidebar nav ul { list-style: none; padding: 0; }
+        .profile-sidebar nav ul li a { color: #ced4da; text-decoration: none; display: block; padding: 8px 0; }
+        .profile-sidebar nav ul li a:hover { color: #fff; background-color: #495057; }
+        .profile-main { flex-grow: 1; padding: 30px; background-color: #fff; margin: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        .profile-header { border-bottom: 1px solid #dee2e6; padding-bottom: 15px; margin-bottom: 20px; }
+        .profile-footer { margin-top: 30px; padding-top: 15px; border-top: 1px solid #dee2e6; font-size: 0.85em; color: #6c757d; text-align: center; }
+    </style>
+     #block head_extra
+        <!-- Extra head elements for profile pages -->
+    #endblock
+</head>
+<body>
+    <div class="profile-container">
+        <aside class="profile-sidebar">
+            <h3>Profile Menu</h3>
+             <nav>
+                <ul>
+                    <li><a href="/profile">Dashboard</a></li>
+                    <li><a href="/profile/settings">Settings (Link Example)</a></li>
+                    <li><a href="/profile/messages">Messages (Link Example)</a></li>
+                    <li><hr style="border-color: #495057;"></li>
+                    <li><a href="/">Back to Main Site</a></li>
+                    <li><a href="/logout">Logout</a></li>
+                </ul>
+            </nav>
+        </aside>
+        <main class="profile-main">
+            <header class="profile-header">
+                 #block profile_header
+                    <h1>User Profile Area</h1>
+                 #endblock
+            </header>
+
+            #block content
+                <p>This is the default content area for the profile section.</p>
+            #endblock
+
+            <footer class="profile-footer">
+                Profile Section Footer &copy; 2024
+                 #block profile_footer_extra
+                 #endblock
+            </footer>
+        </main>
+    </div>
+</body>
+</html>

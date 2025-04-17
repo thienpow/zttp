@@ -1,0 +1,18 @@
+#extends "profile/layout.zmx"
+
+#block title
+    {{ page_title // "Dashboard" }} - Profile Section
+#endblock
+
+#block profile_header
+     <h1>Welcome to your Profile, {{ profile_user // "User" }}!</h1>
+#endblock
+
+#block content
+    <h2>Profile Dashboard</h2>
+    <p>This is your personalized dashboard within the profile section.</p>
+    <p>Your registered email: {{ user_email // "not set" }}</p>
+    <p>This page uses a different layout (`profile/layout.zmx`) than the rest of the site.</p>
+
+    <p>You can add more profile-specific content here.</p>
+#endblock

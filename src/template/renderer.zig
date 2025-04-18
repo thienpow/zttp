@@ -1,3 +1,4 @@
+// src/template/renderer.zig
 const std = @import("std");
 const types = @import("types.zig");
 const cache = @import("cache.zig");
@@ -91,7 +92,7 @@ pub fn renderTokens(
                 const current_depth = depth_if;
                 depth_if += 1;
 
-                const should_render = try evaluateCondition(ctx, condition);
+                const should_render = try evaluateCondition(allocator, ctx, condition);
                 if (should_render) {
                     rendered_if_true_at_depth.items[current_depth] = true;
                 } else {
@@ -146,7 +147,7 @@ pub fn renderTokens(
                     }
                     if (skip_until == null and j == end_index) return TemplateError.MissingEndif;
                 } else {
-                    const should_render = try evaluateCondition(ctx, condition);
+                    const should_render = try evaluateCondition(allocator, ctx, condition);
                     if (should_render) {
                         rendered_if_true_at_depth.items[current_depth] = true;
                     } else {
@@ -325,7 +326,7 @@ pub fn renderTokens(
             .endfor_stmt => {
                 if (depth_for == 0) return TemplateError.InvalidSyntax;
             },
-            .while_start => |condition_str| {
+            .while_start => |condition| {
                 depth_while += 1;
                 var loop_end_idx: ?usize = null;
                 var nested: u32 = 0;
@@ -354,7 +355,7 @@ pub fn renderTokens(
                 const loop_body_end = end_idx;
 
                 while (iteration_count < max_iterations) {
-                    const continue_loop = try evaluateWhileCondition(ctx, condition_str);
+                    const continue_loop = try evaluateCondition(allocator, ctx, condition);
                     if (!continue_loop) break;
 
                     iteration_count += 1;
@@ -424,103 +425,91 @@ pub fn renderTokens(
     }
 }
 
-fn evaluateCondition(ctx: *Context, condition: Condition) !bool {
-    return switch (condition) {
-        .simple => |key| ctx.existsAndTrue(key),
+fn evaluateCondition(allocator: std.mem.Allocator, ctx: *Context, condition: Condition) !bool {
+    switch (condition) {
+        .simple => |key| return ctx.existsAndTrue(key),
         .non_empty => |var_name| {
             const val = ctx.get(var_name);
             return val != null and val.?.len > 0;
         },
         .equals => |eq| {
-            const val = ctx.get(eq.var_name);
-            return val != null and std.mem.eql(u8, val.?, eq.value);
+            const val_actual = ctx.get(eq.var_name) orelse return false;
+            const val_expected = if (eq.is_literal) eq.value else ctx.get(eq.value) orelse return false;
+            return std.mem.eql(u8, val_actual, val_expected);
         },
-    };
-}
-
-fn evaluateWhileCondition(ctx: *Context, condition_str: []const u8) !bool {
-    const trimmed_condition = std.mem.trim(u8, condition_str, " \t");
-
-    if (std.mem.indexOf(u8, trimmed_condition, " == ")) |eq_pos| {
-        const var_n = std.mem.trim(u8, trimmed_condition[0..eq_pos], " \t");
-        var val_expected = std.mem.trim(u8, trimmed_condition[eq_pos + 4 ..], " \t");
-        var expected_is_literal = false;
-
-        if (val_expected.len >= 2 and ((val_expected[0] == '"' and val_expected[val_expected.len - 1] == '"') or (val_expected[0] == '\'' and val_expected[val_expected.len - 1] == '\''))) {
-            val_expected = val_expected[1 .. val_expected.len - 1];
-            expected_is_literal = true;
-        }
-
-        const val_actual = ctx.get(var_n);
-        if (val_actual == null) return false;
-
-        if (expected_is_literal) {
-            return std.mem.eql(u8, val_actual.?, val_expected);
-        } else {
-            const val_expected_from_ctx = ctx.get(val_expected);
-            if (val_expected_from_ctx == null) return false;
-            return std.mem.eql(u8, val_actual.?, val_expected_from_ctx.?);
-        }
-    } else if (std.mem.indexOf(u8, trimmed_condition, " != ")) |ne_pos| {
-        const var_n = std.mem.trim(u8, trimmed_condition[0..ne_pos], " \t");
-        var val_expected = std.mem.trim(u8, trimmed_condition[ne_pos + 4 ..], " \t");
-        var expected_is_literal = false;
-
-        if (val_expected.len >= 2 and ((val_expected[0] == '"' and val_expected[val_expected.len - 1] == '"') or (val_expected[0] == '\'' and val_expected[val_expected.len - 1] == '\''))) {
-            val_expected = val_expected[1 .. val_expected.len - 1];
-            expected_is_literal = true;
-        }
-
-        const val_actual = ctx.get(var_n);
-
-        if (expected_is_literal and val_expected.len == 0) {
-            return val_actual != null and val_actual.?.len > 0;
-        }
-
-        if (val_actual == null) {
-            if (expected_is_literal) return true;
-            return ctx.get(val_expected) != null;
-        }
-
-        if (expected_is_literal) {
+        .not_equals => |ne| {
+            const val_actual = ctx.get(ne.var_name);
+            if (ne.is_literal and ne.value.len == 0) {
+                return val_actual != null and val_actual.?.len > 0;
+            }
+            if (val_actual == null) {
+                return ne.is_literal or ctx.get(ne.value) != null;
+            }
+            const val_expected = if (ne.is_literal) ne.value else ctx.get(ne.value) orelse return true;
             return !std.mem.eql(u8, val_actual.?, val_expected);
-        } else {
-            const val_expected_from_ctx = ctx.get(val_expected);
-            if (val_expected_from_ctx == null) return true;
-            return !std.mem.eql(u8, val_actual.?, val_expected_from_ctx.?);
-        }
-    } else if (std.mem.indexOfScalar(u8, trimmed_condition, '<')) |lt_pos| {
-        if (lt_pos + 1 < trimmed_condition.len and trimmed_condition[lt_pos + 1] == '=') {
-            std.debug.print("Warning: '<=' operator not implemented in #while, treating as simple truthiness.\n", .{});
-            return ctx.existsAndTrue(trimmed_condition);
-        }
-
-        const var_n = std.mem.trim(u8, trimmed_condition[0..lt_pos], " \t");
-        const limit_str = std.mem.trim(u8, trimmed_condition[lt_pos + 1 ..], " \t");
-
-        const val_actual_str = ctx.get(var_n) orelse return false;
-
-        const val_actual_num = std.fmt.parseInt(isize, val_actual_str, 10) catch |err| {
-            std.debug.print("While Warning: Failed to parse left side '{s}' ('{s}') as integer for '<': {any}\n", .{ var_n, val_actual_str, err });
-            return TemplateError.ParseIntError;
-        };
-
-        var limit_num: isize = 0;
-        if (ctx.get(limit_str)) |limit_ctx_str| {
-            limit_num = std.fmt.parseInt(isize, limit_ctx_str, 10) catch |err| {
-                std.debug.print("While Warning: Failed to parse right side var '{s}' ('{s}') as integer for '<': {any}\n", .{ limit_str, limit_ctx_str, err });
+        },
+        .less_than => |lt| {
+            const val_actual_str = ctx.get(lt.var_name) orelse return false;
+            const val_actual = std.fmt.parseInt(isize, val_actual_str, 10) catch |err| {
+                std.debug.print("Error: Failed to parse '{s}' as integer for '<': {any}\n", .{ val_actual_str, err });
                 return TemplateError.ParseIntError;
             };
-        } else {
-            limit_num = std.fmt.parseInt(isize, limit_str, 10) catch |err| {
-                std.debug.print("While Warning: Failed to parse right side literal '{s}' as integer for '<': {any}\n", .{ limit_str, err });
+            const val_expected_str = if (lt.is_literal) lt.value else ctx.get(lt.value) orelse return false;
+            const val_expected = std.fmt.parseInt(isize, val_expected_str, 10) catch |err| {
+                std.debug.print("Error: Failed to parse '{s}' as integer for '<': {any}\n", .{ val_expected_str, err });
                 return TemplateError.ParseIntError;
             };
-        }
-
-        return val_actual_num < limit_num;
-    } else {
-        return ctx.existsAndTrue(trimmed_condition);
+            return val_actual < val_expected;
+        },
+        .less_than_or_equal => |lte| {
+            const val_actual_str = ctx.get(lte.var_name) orelse return false;
+            const val_actual = std.fmt.parseInt(isize, val_actual_str, 10) catch |err| {
+                std.debug.print("Error: Failed to parse '{s}' as integer for '<=': {any}\n", .{ val_actual_str, err });
+                return TemplateError.ParseIntError;
+            };
+            const val_expected_str = if (lte.is_literal) lte.value else ctx.get(lte.value) orelse return false;
+            const val_expected = std.fmt.parseInt(isize, val_expected_str, 10) catch |err| {
+                std.debug.print("Error: Failed to parse '{s}' as integer for '<=': {any}\n", .{ val_expected_str, err });
+                return TemplateError.ParseIntError;
+            };
+            return val_actual <= val_expected;
+        },
+        .greater_than => |gt| {
+            const val_actual_str = ctx.get(gt.var_name) orelse return false;
+            const val_actual = std.fmt.parseInt(isize, val_actual_str, 10) catch |err| {
+                std.debug.print("Error: Failed to parse '{s}' as integer for '>': {any}\n", .{ val_actual_str, err });
+                return TemplateError.ParseIntError;
+            };
+            const val_expected_str = if (gt.is_literal) gt.value else ctx.get(gt.value) orelse return false;
+            const val_expected = std.fmt.parseInt(isize, val_expected_str, 10) catch |err| {
+                std.debug.print("Error: Failed to parse '{s}' as integer for '>': {any}\n", .{ val_expected_str, err });
+                return TemplateError.ParseIntError;
+            };
+            return val_actual > val_expected;
+        },
+        .greater_than_or_equal => |gte| {
+            const val_actual_str = ctx.get(gte.var_name) orelse return false;
+            const val_actual = std.fmt.parseInt(isize, val_actual_str, 10) catch |err| {
+                std.debug.print("Error: Failed to parse '{s}' as integer for '>=': {any}\n", .{ val_actual_str, err });
+                return TemplateError.ParseIntError;
+            };
+            const val_expected_str = if (gte.is_literal) gte.value else ctx.get(gte.value) orelse return false;
+            const val_expected = std.fmt.parseInt(isize, val_expected_str, 10) catch |err| {
+                std.debug.print("Error: Failed to parse '{s}' as integer for '>=': {any}\n", .{ val_expected_str, err });
+                return TemplateError.ParseIntError;
+            };
+            return val_actual >= val_expected;
+        },
+        .logical_and => |logic| {
+            const left_result = try evaluateCondition(allocator, ctx, logic.left.*);
+            if (!left_result) return false;
+            return try evaluateCondition(allocator, ctx, logic.right.*);
+        },
+        .logical_or => |logic| {
+            const left_result = try evaluateCondition(allocator, ctx, logic.left.*);
+            if (left_result) return true;
+            return try evaluateCondition(allocator, ctx, logic.right.*);
+        },
     }
 }
 

@@ -35,6 +35,7 @@
              <ul>
                 <li><a href="/" hx-target="main" hx-boost="true">Home</a></li>
                 <li><a href="/about" hx-target="main" hx-boost="true">About</a></li>
+                <li><a href="/demo/conditionals" hx-target="main" hx-boost="true">Conditionals</a></li>
                 <li><a href="/users/123" hx-target="main" hx-boost="true">User Example (ID 123)</a></li>
                 <li><a href="/api/json" hx-target="main" hx-boost="true">JSON API</a></li>
                 #if logged_in == "true" // Compare string value set in context

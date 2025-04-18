@@ -110,7 +110,25 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
 
         const route_path = try path_buf.toOwnedSlice();
 
+        // Read the Zig file content to check for handler functions
+        const zig_file_path = try std.fs.path.join(allocator, &[_][]const u8{ routes_dir_path, entry.path });
+        defer allocator.free(zig_file_path);
+        const zig_file_content = std.fs.cwd().readFileAlloc(allocator, zig_file_path, 1024 * 1024) catch |err| {
+            std.debug.print("Warning: Failed to read {s}: {}. Skipping.\n", .{ zig_file_path, err });
+            allocator.free(route_path);
+            continue;
+        };
+        defer allocator.free(zig_file_content);
+
         for (http_methods) |method| {
+            const method_str = @tagName(method);
+            // Check if the handler function exists (e.g., "pub fn get(")
+            const handler_signature = try std.fmt.allocPrint(allocator, "pub fn {s}(", .{method_str});
+            defer allocator.free(handler_signature);
+            if (std.mem.indexOf(u8, zig_file_content, handler_signature) == null) {
+                continue; // Skip if handler is not found
+            }
+
             // Create the template path (sibling .zmx file)
             var template_path_buf = std.ArrayList(u8).init(allocator);
             defer template_path_buf.deinit();
@@ -126,7 +144,6 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
             try import_path_buf.appendSlice(entry.path);
             const import_path = try import_path_buf.toOwnedSlice();
 
-            const method_str = @tagName(method);
             try routes.append(.{
                 .module = try allocator.dupe(u8, module_name),
                 .import_path = import_path,
@@ -168,37 +185,28 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
         var buf = std.ArrayList(u8).init(allocator);
         defer buf.deinit();
         try buf.writer().writeAll(
-            \\    if (@hasDecl(@import("
-        );
-        try buf.appendSlice(route.import_path);
-        try buf.appendSlice(
-            \\"), "
-        );
-        try buf.appendSlice(route.handler_name);
-        try buf.appendSlice(
-            \\")) {
-            \\        try routes.append(Route{
-            \\            .module_name = try allocator.dupe(u8, "
+            \\    try routes.append(Route{
+            \\        .module_name = try allocator.dupe(u8, "
         );
         try buf.appendSlice(route.module);
         try buf.appendSlice(
             \\"),
-            \\            .method = .
+            \\        .method = .
         );
         try buf.appendSlice(@tagName(route.method));
         try buf.appendSlice(
             \\,
-            \\            .path = try allocator.dupe(u8, "
+            \\        .path = try allocator.dupe(u8, "
         );
         try buf.appendSlice(route.path);
         try buf.appendSlice(
             \\"),
-            \\            .template_path = try allocator.dupe(u8, "
+            \\        .template_path = try allocator.dupe(u8, "
         );
         try buf.appendSlice(route.template_path);
         try buf.appendSlice(
             \\"),
-            \\            .handler = @import("
+            \\        .handler = @import("
         );
         try buf.appendSlice(route.import_path);
         try buf.appendSlice(
@@ -207,8 +215,7 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
         try buf.appendSlice(route.handler_name);
         try buf.appendSlice(
             \\,
-            \\        });
-            \\    }
+            \\    });
             \\
         );
         try writer.writeAll(buf.items);
@@ -219,5 +226,5 @@ pub fn generateRoutes(allocator: std.mem.Allocator, routes_dir_path: []const u8,
         \\}
     );
 
-    //std.debug.print("Generated {s} with {} routes\n", .{ output_file, routes.items.len });
+    std.debug.print("Generated {s} with {} routes\n", .{ output_file, routes.items.len });
 }

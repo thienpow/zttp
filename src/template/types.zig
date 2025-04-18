@@ -1,3 +1,4 @@
+// src/template/types.zig
 const std = @import("std");
 
 pub const TemplateError = error{
@@ -23,7 +24,14 @@ pub const TemplateError = error{
 pub const Condition = union(enum) {
     simple: []const u8,
     non_empty: []const u8,
-    equals: struct { var_name: []const u8, value: []const u8 },
+    equals: struct { var_name: []const u8, value: []const u8, is_literal: bool },
+    not_equals: struct { var_name: []const u8, value: []const u8, is_literal: bool },
+    less_than: struct { var_name: []const u8, value: []const u8, is_literal: bool },
+    less_than_or_equal: struct { var_name: []const u8, value: []const u8, is_literal: bool },
+    greater_than: struct { var_name: []const u8, value: []const u8, is_literal: bool },
+    greater_than_or_equal: struct { var_name: []const u8, value: []const u8, is_literal: bool },
+    logical_and: struct { left: *const Condition, right: *const Condition },
+    logical_or: struct { left: *const Condition, right: *const Condition },
 };
 
 pub const SetStmtPayload = struct {
@@ -40,7 +48,7 @@ pub const Token = union(enum) {
     endif_stmt,
     for_start: struct { var_name: []const u8, collection: []const u8 },
     endfor_stmt,
-    while_start: []const u8,
+    while_start: Condition,
     endwhile_stmt,
     set_stmt: SetStmtPayload,
     extends: []const u8,

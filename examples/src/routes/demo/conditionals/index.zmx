@@ -1,0 +1,6 @@
+
+#extends "layout.zmx"
+
+#block title
+{{ page_title // "Demo" }} - Conditionals
+#endblock

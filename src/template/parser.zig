@@ -1,3 +1,4 @@
+// src/template/parser.zig
 const std = @import("std");
 const types = @import("types.zig");
 const TemplateError = types.TemplateError;
@@ -31,30 +32,96 @@ pub fn getDirectiveContent(content: []const u8, tag_start_pos: usize, tag_len: u
     return std.mem.trim(u8, content[content_start..content_end], " \t");
 }
 
-pub fn parseCondition(content: []const u8) TemplateError!Condition {
+pub fn parseCondition(allocator: std.mem.Allocator, content: []const u8) TemplateError!Condition {
     const trimmed = std.mem.trim(u8, content, " \t");
+    if (trimmed.len == 0) return TemplateError.InvalidSyntax;
+
+    // Check for logical operators 'and' or 'or'
+    var paren_depth: usize = 0;
+    var split_pos: ?usize = null;
+    var split_op: []const u8 = "";
+    for (trimmed, 0..) |c, i| {
+        if (c == '(') {
+            paren_depth += 1;
+        } else if (c == ')') {
+            if (paren_depth == 0) return TemplateError.InvalidSyntax;
+            paren_depth -= 1;
+        } else if (paren_depth == 0) {
+            if (i + 3 <= trimmed.len and std.mem.eql(u8, trimmed[i .. i + 3], "and")) {
+                split_pos = i;
+                split_op = "and";
+            } else if (i + 2 <= trimmed.len and std.mem.eql(u8, trimmed[i .. i + 2], "or")) {
+                split_pos = i;
+                split_op = "or";
+            }
+        }
+    }
+    if (paren_depth != 0) return TemplateError.InvalidSyntax;
+
+    if (split_pos) |pos| {
+        const left_str = std.mem.trim(u8, trimmed[0..pos], " \t");
+        const right_str = std.mem.trim(u8, trimmed[pos + split_op.len ..], " \t");
+        if (left_str.len == 0 or right_str.len == 0) return TemplateError.InvalidSyntax;
+
+        const left_condition = try allocator.create(Condition);
+        const right_condition = try allocator.create(Condition);
+        left_condition.* = try parseCondition(allocator, left_str);
+        right_condition.* = try parseCondition(allocator, right_str);
+
+        return if (std.mem.eql(u8, split_op, "and"))
+            Condition{ .logical_and = .{ .left = left_condition, .right = right_condition } }
+        else
+            Condition{ .logical_or = .{ .left = left_condition, .right = right_condition } };
+    }
+
+    // Handle comparison operators
+    const operators = [_]struct { op: []const u8, tag: std.meta.Tag(Condition) }{
+        .{ .op = "==", .tag = .equals },
+        .{ .op = "!=", .tag = .not_equals },
+        .{ .op = "<=", .tag = .less_than_or_equal },
+        .{ .op = ">=", .tag = .greater_than_or_equal },
+        .{ .op = "<", .tag = .less_than },
+        .{ .op = ">", .tag = .greater_than },
+    };
+
+    for (operators) |op| {
+        if (std.mem.indexOf(u8, trimmed, op.op)) |op_pos| {
+            const var_name = std.mem.trim(u8, trimmed[0..op_pos], " \t");
+            var value = std.mem.trim(u8, trimmed[op_pos + op.op.len ..], " \t");
+            var is_literal = false;
+
+            if (value.len >= 2 and ((value[0] == '"' and value[value.len - 1] == '"') or (value[0] == '\'' and value[value.len - 1] == '\''))) {
+                value = value[1 .. value.len - 1];
+                is_literal = true;
+            }
+
+            if (var_name.len == 0 or value.len == 0) return TemplateError.InvalidSyntax;
+
+            return switch (op.tag) {
+                .equals => Condition{ .equals = .{ .var_name = var_name, .value = value, .is_literal = is_literal } },
+                .not_equals => Condition{ .not_equals = .{ .var_name = var_name, .value = value, .is_literal = is_literal } },
+                .less_than => Condition{ .less_than = .{ .var_name = var_name, .value = value, .is_literal = is_literal } },
+                .less_than_or_equal => Condition{ .less_than_or_equal = .{ .var_name = var_name, .value = value, .is_literal = is_literal } },
+                .greater_than => Condition{ .greater_than = .{ .var_name = var_name, .value = value, .is_literal = is_literal } },
+                .greater_than_or_equal => Condition{ .greater_than_or_equal = .{ .var_name = var_name, .value = value, .is_literal = is_literal } },
+                else => unreachable,
+            };
+        }
+    }
+
+    // Handle non-empty check (e.g., var_name != "")
     if (std.mem.indexOf(u8, trimmed, " != ")) |ne_pos| {
         const var_name = std.mem.trim(u8, trimmed[0..ne_pos], " \t");
         const right = std.mem.trim(u8, trimmed[ne_pos + 4 ..], " \t");
         if ((std.mem.eql(u8, right, "\"\"") or std.mem.eql(u8, right, "''")) and var_name.len > 0) {
             return .{ .non_empty = var_name };
         }
-    } else if (std.mem.indexOf(u8, trimmed, " == ")) |eq_pos| {
-        const var_name = std.mem.trim(u8, trimmed[0..eq_pos], " \t");
-        const right = std.mem.trim(u8, trimmed[eq_pos + 4 ..], " \t");
-        if (right.len >= 2 and ((right[0] == '"' and right[right.len - 1] == '"') or (right[0] == '\'' and right[right.len - 1] == '\''))) {
-            const value = right[1 .. right.len - 1];
-            if (var_name.len > 0) {
-                return .{ .equals = .{ .var_name = var_name, .value = value } };
-            }
-        }
     }
 
-    if (trimmed.len == 0) return TemplateError.InvalidSyntax;
+    // Simple truthiness check
     return .{ .simple = trimmed };
 }
 
-// Rest of the tokenize function remains unchanged
 pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayList(Token) {
     var tokens = std.ArrayList(Token).init(allocator);
     errdefer tokens.deinit();
@@ -76,13 +143,13 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
         } else if (std.mem.startsWith(u8, remaining, "#if ")) {
             first_tag_found = true;
             const condition_str = getDirectiveContent(template, pos, 4);
-            const condition = try parseCondition(condition_str);
+            const condition = try parseCondition(allocator, condition_str);
             try tokens.append(.{ .if_start = condition });
             pos = findEndOfDirective(template, pos + 4);
         } else if (std.mem.startsWith(u8, remaining, "#elseif ")) {
             first_tag_found = true;
             const condition_str = getDirectiveContent(template, pos, 8);
-            const condition = try parseCondition(condition_str);
+            const condition = try parseCondition(allocator, condition_str);
             try tokens.append(.{ .elseif_stmt = condition });
             pos = findEndOfDirective(template, pos + 8);
         } else if (std.mem.startsWith(u8, remaining, "#else")) {
@@ -106,7 +173,7 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
             if (var_name.len == 0 or collection.len == 0) return TemplateError.InvalidSyntax;
             try tokens.append(.{ .for_start = .{ .var_name = var_name, .collection = collection } });
             pos = findEndOfDirective(template, pos + 5);
-        } else if (std.mem.startsWith(u8, remaining, "#endfor LTS")) {
+        } else if (std.mem.startsWith(u8, remaining, "#endfor")) {
             const line_content = getDirectiveContent(template, pos, 7);
             if (line_content.len > 0) return TemplateError.InvalidSyntax;
             first_tag_found = true;
@@ -114,8 +181,8 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
             pos = findEndOfDirective(template, pos + 7);
         } else if (std.mem.startsWith(u8, remaining, "#while ")) {
             first_tag_found = true;
-            const condition = getDirectiveContent(template, pos, 7);
-            if (condition.len == 0) return TemplateError.InvalidSyntax;
+            const condition_str = getDirectiveContent(template, pos, 7);
+            const condition = try parseCondition(allocator, condition_str);
             try tokens.append(.{ .while_start = condition });
             pos = findEndOfDirective(template, pos + 7);
         } else if (std.mem.startsWith(u8, remaining, "#endwhile")) {

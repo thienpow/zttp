@@ -1,6 +1,73 @@
-
 #extends "layout.zmx"
 
 #block title
-{{ page_title // "Demo" }} - Conditionals
+{{ page_title // "Demo" }} - Conditionals Showcase
+#endblock
+
+#block content
+<h1>Conditional Logic Examples</h1>
+
+<hr>
+
+<h2>Example 1: Simple Truthiness &amp; Else</h2>
+<p>Checks if a variable 'user' is considered true (exists and is not false/null/empty).</p>
+#if user
+    <p>Welcome back, <strong>{{ user.name }}</strong>!</p>
+#else
+    <p>Welcome, Guest! Please <a href="/login">login</a>.</p>
+#endif
+
+<hr>
+
+<h2>Example 2: Equality, Inequality &amp; ElseIf</h2>
+<p>Checks the value of a 'status' variable.</p>
+#if status == "active"
+    <p>Account Status: <span style="color: green;">Active</span></p>
+#elseif status == "pending"
+    <p>Account Status: <span style="color: orange;">Pending Activation</span></p>
+#elseif status == "suspended"
+    <p>Account Status: <span style="color: red;">Suspended</span></p>
+#else
+    <p>Account Status: <span style="color: grey;">Unknown or Inactive</span></p>
+#endif
+
+<hr>
+
+<h2>Example 3: Numeric Comparisons</h2>
+<p>Checks the value of an 'item_count' variable.</p>
+#if item_count > 10
+    <p>You have lots of items ({{ item_count }})!</p>
+#elseif item_count > 0
+    <p>You have {{ item_count }} item(s).</p>
+#else
+    <p>Your cart is empty.</p>
+#endif
+
+<hr>
+
+<h2>Example 4: Logical Operators (and/or)</h2>
+<p>Checks 'is_admin' and 'has_special_permission' flags.</p>
+#if is_admin and has_special_permission
+    <p>Access Level: Super Admin (Admin with Special Permissions)</p>
+#elseif is_admin or has_special_permission
+    #if is_admin
+        <p>Access Level: Standard Admin</p>
+    #else
+        <p>Access Level: User with Special Permissions</p>
+    #endif
+#else
+    <p>Access Level: Standard User</p>
+#endif
+
+<hr>
+
+<h2>Example 5: Non-Empty Check (Implicit)</h2>
+<p>Checks if the 'messages' variable exists and is not an empty string.</p>
+#if messages != ""
+    <p><strong>You have new messages!</strong></p>
+#else
+    <p>No new messages.</p>
+#endif
+
+<hr>
 #endblock

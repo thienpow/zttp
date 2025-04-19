@@ -1,3 +1,4 @@
+// src/template.main.zig
 const std = @import("std");
 const cache = @import("cache.zig");
 const parser = @import("parser.zig");

@@ -1,6 +1,5 @@
 // src/template/types.zig
 const std = @import("std");
-
 pub const TemplateError = error{
     InvalidSyntax,
     MissingEndif,
@@ -21,15 +20,22 @@ pub const TemplateError = error{
     ParseIntError,
 };
 
+// Define ComparisonData first so it can be used in Condition
+pub const ComparisonData = struct {
+    var_name: []const u8,
+    value: []const u8,
+    is_literal: bool,
+};
+
 pub const Condition = union(enum) {
     simple: []const u8,
     non_empty: []const u8,
-    equals: struct { var_name: []const u8, value: []const u8, is_literal: bool },
-    not_equals: struct { var_name: []const u8, value: []const u8, is_literal: bool },
-    less_than: struct { var_name: []const u8, value: []const u8, is_literal: bool },
-    less_than_or_equal: struct { var_name: []const u8, value: []const u8, is_literal: bool },
-    greater_than: struct { var_name: []const u8, value: []const u8, is_literal: bool },
-    greater_than_or_equal: struct { var_name: []const u8, value: []const u8, is_literal: bool },
+    equals: ComparisonData,
+    not_equals: ComparisonData,
+    less_than: ComparisonData,
+    less_than_or_equal: ComparisonData,
+    greater_than: ComparisonData,
+    greater_than_or_equal: ComparisonData,
     logical_and: struct { left: *const Condition, right: *const Condition },
     logical_or: struct { left: *const Condition, right: *const Condition },
 };

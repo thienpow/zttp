@@ -4,19 +4,24 @@ const types = @import("types.zig");
 const TemplateError = types.TemplateError;
 const Condition = types.Condition;
 const Token = types.Token;
+const ComparisonData = types.ComparisonData;
 
+/// Finds the position immediately after the end of the current line,
+/// consuming the newline character(s) (LF, CRLF, or CR).
 pub fn findEndOfDirective(content: []const u8, start_pos: usize) usize {
     var current_pos = start_pos;
-    // Find the next newline character(s)
+    // Find the start of the newline sequence
     while (current_pos < content.len and content[current_pos] != '\n' and content[current_pos] != '\r') {
         current_pos += 1;
     }
-    // Consume the newline character(s) (LF, CRLF, or CR)
+
+    // Consume the newline character(s) if present
     if (current_pos < content.len) {
         if (content[current_pos] == '\r') {
-            current_pos += 1;
+            current_pos += 1; // Consume CR
+            // Check for LF following CR (CRLF)
             if (current_pos < content.len and content[current_pos] == '\n') {
-                current_pos += 1; // Consume LF after CR
+                current_pos += 1; // Consume LF
             }
         } else if (content[current_pos] == '\n') {
             current_pos += 1; // Consume LF
@@ -25,104 +30,126 @@ pub fn findEndOfDirective(content: []const u8, start_pos: usize) usize {
     return current_pos;
 }
 
+/// Extracts the content of a directive tag on the same line,
+/// starting immediately after the tag itself and trimmed of leading/trailing whitespace.
+/// Example: For "#if my_var", given start_pos of '#' and tag_len 4 ("#if "),
+/// it returns "my_var".
 pub fn getDirectiveContent(content: []const u8, tag_start_pos: usize, tag_len: usize) []const u8 {
     const content_start = tag_start_pos + tag_len;
     var content_end = content_start;
-    // Find the end of the line (excluding newline chars)
+
+    // Find the end of the line (before newline chars)
     while (content_end < content.len and content[content_end] != '\n' and content[content_end] != '\r') {
         content_end += 1;
     }
-    // Trim whitespace from the extracted content
-    return std.mem.trim(u8, content[content_start..content_end], " \t");
+
+    // Ensure slice bounds are valid before trimming
+    const raw_content = if (content_start < content_end) content[content_start..content_end] else "";
+    return std.mem.trim(u8, raw_content, " \t");
 }
 
+/// Parses a condition string into a structured Condition representation.
+/// Handles logical operators (and, or), comparisons (==, !=, <, etc.),
+/// parenthesis grouping, and simple truthiness checks.
 pub fn parseCondition(allocator: std.mem.Allocator, content: []const u8) TemplateError!Condition {
     const trimmed = std.mem.trim(u8, content, " \t");
     if (trimmed.len == 0) return TemplateError.InvalidSyntax;
 
-    // Check for logical operators 'and' or 'or', respecting parenthesis
+    // --- 1. Check for logical operators 'and' or 'or' outside parentheses ---
     var paren_depth: usize = 0;
     var split_pos: ?usize = null;
     var split_op: []const u8 = "";
-    // --- FIX: Add variable to store operator length ---
-    var split_op_len: usize = 0;
+    var split_op_len: usize = 0; // Length of the operator (" and " or " or ")
 
     for (trimmed, 0..) |c, i| {
-        if (c == '(') {
-            paren_depth += 1;
-        } else if (c == ')') {
-            if (paren_depth == 0) return TemplateError.InvalidSyntax; // Mismatched parens
-            paren_depth -= 1;
-        } else if (paren_depth == 0) {
-            // Check for " and " or " or " with spaces
-            if (i + 5 <= trimmed.len and std.mem.eql(u8, trimmed[i .. i + 5], " and ")) {
-                if (split_pos == null) { // Keep the first one found
-                    split_pos = i;
-                    split_op = "and";
-                    // --- FIX: Store length ---
-                    split_op_len = 5;
+        switch (c) {
+            '(' => paren_depth += 1,
+            ')' => {
+                if (paren_depth == 0) return TemplateError.InvalidSyntax; // Mismatched closing parenthesis
+                paren_depth -= 1;
+            },
+            else => {
+                if (paren_depth == 0) {
+                    // We are at the top level (not inside parentheses)
+                    // Check for " and " (5 chars)
+                    if (i + 5 <= trimmed.len and std.mem.eql(u8, trimmed[i .. i + 5], " and ")) {
+                        // Use the first operator found at the top level for correct precedence
+                        if (split_pos == null) {
+                            split_pos = i;
+                            split_op = "and";
+                            split_op_len = 5;
+                        }
+                    }
+                    // Check for " or " (4 chars)
+                    else if (i + 4 <= trimmed.len and std.mem.eql(u8, trimmed[i .. i + 4], " or ")) {
+                        if (split_pos == null) {
+                            split_pos = i;
+                            split_op = "or";
+                            split_op_len = 4;
+                        }
+                    }
                 }
-            } else if (i + 4 <= trimmed.len and std.mem.eql(u8, trimmed[i .. i + 4], " or ")) {
-                if (split_pos == null) { // Keep the first one found
-                    split_pos = i;
-                    split_op = "or";
-                    // --- FIX: Store length ---
-                    split_op_len = 4;
-                }
-            }
+            },
         }
     }
-    if (paren_depth != 0) return TemplateError.InvalidSyntax; // Mismatched parens overall
+    if (paren_depth != 0) return TemplateError.InvalidSyntax; // Mismatched opening parenthesis
 
     if (split_pos) |pos| {
         const left_str = std.mem.trim(u8, trimmed[0..pos], " \t");
-        // --- FIX: Use stored length ---
-        const right_start = pos + split_op_len;
+        const right_start = pos + split_op_len; // Start after the operator and its spaces
         const right_str = std.mem.trim(u8, trimmed[right_start..], " \t");
 
         if (left_str.len == 0 or right_str.len == 0) return TemplateError.InvalidSyntax;
 
         // Recursively parse sub-conditions
-        const left_condition = try allocator.create(Condition);
-        errdefer allocator.destroy(left_condition);
-        const right_condition = try allocator.create(Condition);
-        errdefer allocator.destroy(right_condition);
+        // Need to allocate memory for the sub-conditions on the heap
+        const left_condition_ptr = try allocator.create(Condition);
+        errdefer allocator.destroy(left_condition_ptr);
+        const right_condition_ptr = try allocator.create(Condition);
+        errdefer allocator.destroy(right_condition_ptr);
 
-        left_condition.* = try parseCondition(allocator, left_str);
-        right_condition.* = try parseCondition(allocator, right_str);
+        left_condition_ptr.* = try parseCondition(allocator, left_str);
+        right_condition_ptr.* = try parseCondition(allocator, right_str);
 
-        // Use the split_op variable which is definitely known here
-        return if (std.mem.eql(u8, split_op, "and"))
-            Condition{ .logical_and = .{ .left = left_condition, .right = right_condition } }
-        else // Must be "or"
-            Condition{ .logical_or = .{ .left = left_condition, .right = right_condition } };
+        return switch (split_op[1]) { // Quick check on the second char ('n' for and, 'r' for or)
+            'n' => Condition{ .logical_and = .{ .left = left_condition_ptr, .right = right_condition_ptr } },
+            'r' => Condition{ .logical_or = .{ .left = left_condition_ptr, .right = right_condition_ptr } },
+            else => unreachable, // Should be "and" or "or" if split_op is set
+        };
     }
 
-    // Handle Parenthesis Grouping if no logical operator was found at top level
+    // --- 2. Handle Parenthesis Grouping if no logical operator was found at top level ---
     if (trimmed.len >= 2 and trimmed[0] == '(' and trimmed[trimmed.len - 1] == ')') {
-        // Basic check for balanced parens within the outer group
-        paren_depth = 0;
-        var balanced = true;
+        // Check if the parentheses are balanced *within* this group
+        // Note: The outer loop already confirmed overall balance. This ensures
+        // the expression isn't like `(a) + (b)` which should have been caught by operator split.
+        // It primarily handles cases like `((a and b))` -> `(a and b)`.
+        var inner_paren_depth: usize = 0;
+        var balanced_inner = true;
         for (trimmed[1 .. trimmed.len - 1]) |c| {
             if (c == '(') {
-                paren_depth += 1;
+                inner_paren_depth += 1;
             } else if (c == ')') {
-                if (paren_depth == 0) {
-                    balanced = false;
+                if (inner_paren_depth == 0) {
+                    balanced_inner = false;
                     break;
                 }
-                paren_depth -= 1;
+                inner_paren_depth -= 1;
             }
         }
-        if (!balanced or paren_depth != 0) return TemplateError.InvalidSyntax;
-
-        // If balanced, recursively parse the content inside the parentheses
-        return parseCondition(allocator, trimmed[1 .. trimmed.len - 1]);
+        // If the parentheses inside are balanced and match up, parse the inner content
+        if (balanced_inner and inner_paren_depth == 0) {
+            return parseCondition(allocator, trimmed[1 .. trimmed.len - 1]);
+        } else {
+            // If inner content is not balanced (e.g., `(()`) or doesn't form a single group (e.g. `(a) or (b)`)
+            // Note: the latter case *should* have been caught by the logical operator split above.
+            return TemplateError.InvalidSyntax;
+        }
     }
 
-    // Handle comparison operators
+    // --- 3. Handle comparison operators ---
+    // Order matters: check longer operators first (e.g., >= before >)
     const operators = [_]struct { op: []const u8, tag: std.meta.Tag(Condition) }{
-        // Order matters: check longer operators first
         .{ .op = "==", .tag = .equals },
         .{ .op = "!=", .tag = .not_equals },
         .{ .op = "<=", .tag = .less_than_or_equal },
@@ -131,30 +158,39 @@ pub fn parseCondition(allocator: std.mem.Allocator, content: []const u8) Templat
         .{ .op = ">", .tag = .greater_than },
     };
 
-    for (operators) |op| {
-        // Find the first occurrence of the operator
-        if (std.mem.indexOf(u8, trimmed, op.op)) |op_pos| {
-            // Basic check to avoid matching operator within identifiers (e.g. "my==var")
-            // A proper tokenizer would be more robust.
-            if (op_pos > 0 and std.ascii.isAlphanumeric(trimmed[op_pos - 1])) continue;
-            const end_op_pos = op_pos + op.op.len;
-            if (end_op_pos < trimmed.len and std.ascii.isAlphanumeric(trimmed[end_op_pos])) continue;
+    // Iterate through operators at runtime
+    for (operators) |op_info| {
+        if (std.mem.indexOf(u8, trimmed, op_info.op)) |op_pos| {
+            // Basic check to avoid matching operator within identifiers (e.g., "my==var").
+            // A proper tokenizer/lexer would be more robust here.
+            if (op_pos > 0 and std.ascii.isAlphanumeric(trimmed[op_pos - 1])) continue; // OK in runtime for
+            const op_end_pos = op_pos + op_info.op.len;
+            if (op_end_pos < trimmed.len and std.ascii.isAlphanumeric(trimmed[op_end_pos])) continue; // OK in runtime for
 
             const var_name = std.mem.trim(u8, trimmed[0..op_pos], " \t");
-            var raw_value = std.mem.trim(u8, trimmed[end_op_pos..], " \t");
+            const raw_value = std.mem.trim(u8, trimmed[op_end_pos..], " \t");
+
+            if (var_name.len == 0 or raw_value.len == 0) return TemplateError.InvalidSyntax;
+
             var is_literal = false;
             var value_content: []const u8 = raw_value; // Content if literal, or the full raw_value if identifier
 
+            // Check if the right-hand side is a quoted string literal
             if (raw_value.len >= 2 and ((raw_value[0] == '"' and raw_value[raw_value.len - 1] == '"') or (raw_value[0] == '\'' and raw_value[raw_value.len - 1] == '\''))) {
-                value_content = raw_value[1 .. raw_value.len - 1];
+                value_content = raw_value[1 .. raw_value.len - 1]; // Extract content inside quotes
                 is_literal = true;
+            } else {
+                // If not a literal, it must be a variable identifier. Validate it? (Basic check: not empty)
+                if (value_content.len == 0) return TemplateError.InvalidSyntax;
+                // Could add more validation for identifier characters here if desired.
             }
 
-            // Special case handling for '!= ""' or '!= '''
-            if (op.tag == .not_equals and is_literal and value_content.len == 0) {
-                // Ensure the right side was *only* the empty quotes and var_name is valid
-                if (raw_value.len == 2 and var_name.len > 0) {
-                    // Validate var_name contains only valid identifier characters
+            // Special case: Optimize `variable != ""` or `variable != ''` into a 'non_empty' check.
+            if (op_info.tag == .not_equals and is_literal and value_content.len == 0) {
+                // Ensure the right side was *only* the empty quotes (`""` or `''`)
+                if (raw_value.len == 2) {
+                    // Validate var_name contains only valid identifier characters (alphanumeric, _, .)
+                    // This prevents parsing something like `"some string" != ""` incorrectly.
                     for (var_name) |c| {
                         if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '.') {
                             std.debug.print("Invalid variable name in non_empty condition: '{s}'\n", .{var_name});
@@ -163,127 +199,141 @@ pub fn parseCondition(allocator: std.mem.Allocator, content: []const u8) Templat
                     }
                     return Condition{ .non_empty = var_name };
                 } else {
-                    std.debug.print("Invalid non_empty syntax: raw_value='{s}', var_name='{s}'\n", .{ raw_value, var_name });
-                    return TemplateError.InvalidSyntax;
+                    // This could happen if there was whitespace like `var != "  "` which trims to `""`
+                    // but isn't the intended non_empty check. Treat as regular comparison.
+                    // Fall through to the general comparison logic below.
+                    // std.debug.print("Interpreting as standard not_equals: var='{s}', raw_value='{s}'\n", .{ var_name, raw_value });
                 }
             }
 
-            // General validation for comparison operators
-            if (var_name.len == 0) return TemplateError.InvalidSyntax; // Left side must exist
-            if (raw_value.len == 0) return TemplateError.InvalidSyntax; // Right side must exist (either literal quotes or identifier)
+            // Construct the appropriate comparison condition
+            const comparison_data = ComparisonData{
+                .var_name = var_name,
+                .value = value_content,
+                .is_literal = is_literal,
+            };
 
-            // If the right side is NOT a literal, its identifier name cannot be empty
-            if (!is_literal and value_content.len == 0) return TemplateError.InvalidSyntax;
-
-            // Use the content inside quotes if literal, otherwise the raw identifier
-            const final_value = value_content;
-
-            return switch (op.tag) {
-                .equals => Condition{ .equals = .{ .var_name = var_name, .value = final_value, .is_literal = is_literal } },
-                .not_equals => Condition{ .not_equals = .{ .var_name = var_name, .value = final_value, .is_literal = is_literal } },
-                .less_than => Condition{ .less_than = .{ .var_name = var_name, .value = final_value, .is_literal = is_literal } },
-                .less_than_or_equal => Condition{ .less_than_or_equal = .{ .var_name = var_name, .value = final_value, .is_literal = is_literal } },
-                .greater_than => Condition{ .greater_than = .{ .var_name = var_name, .value = final_value, .is_literal = is_literal } },
-                .greater_than_or_equal => Condition{ .greater_than_or_equal = .{ .var_name = var_name, .value = final_value, .is_literal = is_literal } },
-                else => unreachable,
+            return switch (op_info.tag) {
+                .equals => Condition{ .equals = comparison_data },
+                .not_equals => Condition{ .not_equals = comparison_data },
+                .less_than => Condition{ .less_than = comparison_data },
+                .less_than_or_equal => Condition{ .less_than_or_equal = comparison_data },
+                .greater_than => Condition{ .greater_than = comparison_data },
+                .greater_than_or_equal => Condition{ .greater_than_or_equal = comparison_data },
+                else => unreachable, // Only comparison tags are in the `operators` list
             };
         }
     }
 
-    // Simple truthiness check (if no operators or logical constructs matched)
-    // Perform basic validation: must not be empty and maybe check for valid identifier chars
-    if (trimmed.len == 0) return TemplateError.InvalidSyntax;
-    // Could add stricter validation here (e.g., check allowed characters) if needed
+    // --- 4. Simple truthiness check (if no operators or logical constructs matched) ---
+    // The remaining `trimmed` string is treated as a variable name to check for truthiness.
+    // Perform basic validation: must not be empty.
+    if (trimmed.len == 0) return TemplateError.InvalidSyntax; // Should have been caught earlier, but safety check.
+    // Could add stricter validation here (e.g., check allowed identifier characters) if needed.
     // For now, accept any non-empty string that wasn't parsed as something else.
-    return .{ .simple = trimmed };
+    return Condition{ .simple = trimmed };
 }
 
+/// Tokenizes the template content into a sequence of Tokens.
 pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayList(Token) {
     var tokens = std.ArrayList(Token).init(allocator);
     errdefer tokens.deinit();
 
     var pos: usize = 0;
+    // Tracks if any non-whitespace text or tag has been encountered.
+    // Used to ignore leading whitespace and enforce #extends placement.
     var first_tag_found = false;
 
     while (pos < template.len) {
         const remaining = template[pos..];
 
+        // Use `if/else if` chain for mutually exclusive tags starting at `pos`
         if (std.mem.startsWith(u8, remaining, "{{")) {
             first_tag_found = true;
-            const start = pos + 2;
+            const start = pos + 2; // Start after "{{"
             const end_offset = std.mem.indexOf(u8, template[start..], "}}") orelse return TemplateError.UnclosedTag;
-            const var_name = std.mem.trim(u8, template[start .. start + end_offset], " \t");
-            if (var_name.len == 0) return TemplateError.InvalidSyntax;
+            const end = start + end_offset;
+            const var_name = std.mem.trim(u8, template[start..end], " \t");
+            if (var_name.len == 0) return TemplateError.InvalidSyntax; // Variable name cannot be empty
             try tokens.append(.{ .variable = var_name });
-            pos = start + end_offset + 2;
+            pos = end + 2; // Move past "}}"
         } else if (std.mem.startsWith(u8, remaining, "#if ")) {
             first_tag_found = true;
-            const condition_str = getDirectiveContent(template, pos, 4);
-            const condition = try parseCondition(allocator, condition_str); // Uses updated parseCondition
+            const tag_len = 4;
+            const condition_str = getDirectiveContent(template, pos, tag_len);
+            const condition = try parseCondition(allocator, condition_str);
             try tokens.append(.{ .if_start = condition });
-            pos = findEndOfDirective(template, pos + 4);
+            pos = findEndOfDirective(template, pos + tag_len); // Move past "#if " and the condition line
         } else if (std.mem.startsWith(u8, remaining, "#elseif ")) {
             first_tag_found = true;
-            const condition_str = getDirectiveContent(template, pos, 8);
-            const condition = try parseCondition(allocator, condition_str); // Uses updated parseCondition
+            const tag_len = 8;
+            const condition_str = getDirectiveContent(template, pos, tag_len);
+            const condition = try parseCondition(allocator, condition_str);
             try tokens.append(.{ .elseif_stmt = condition });
-            pos = findEndOfDirective(template, pos + 8);
+            pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#else")) {
-            const line_content = getDirectiveContent(template, pos, 5);
+            first_tag_found = true;
+            const tag_len = 5;
+            const line_content = getDirectiveContent(template, pos, tag_len);
             // Allow only whitespace after #else
-            if (line_content.len > 0 and std.mem.indexOfNone(u8, line_content, " \t") != null) {
+            if (std.mem.indexOfNone(u8, line_content, " \t") != null) {
                 return TemplateError.InvalidSyntax;
             }
-            first_tag_found = true;
             try tokens.append(.else_stmt);
-            pos = findEndOfDirective(template, pos + 5);
+            pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#endif")) {
-            const line_content = getDirectiveContent(template, pos, 6);
+            first_tag_found = true;
+            const tag_len = 6;
+            const line_content = getDirectiveContent(template, pos, tag_len);
             // Allow only whitespace after #endif
-            if (line_content.len > 0 and std.mem.indexOfNone(u8, line_content, " \t") != null) {
+            if (std.mem.indexOfNone(u8, line_content, " \t") != null) {
                 return TemplateError.InvalidSyntax;
             }
-            first_tag_found = true;
             try tokens.append(.endif_stmt);
-            pos = findEndOfDirective(template, pos + 6);
+            pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#for ")) {
             first_tag_found = true;
-            const content = getDirectiveContent(template, pos, 5);
+            const tag_len = 5;
+            const content = getDirectiveContent(template, pos, tag_len);
             const in_pos = std.mem.indexOf(u8, content, " in ") orelse return TemplateError.InvalidSyntax;
             const var_name = std.mem.trim(u8, content[0..in_pos], " \t");
-            const collection = std.mem.trim(u8, content[in_pos + 4 ..], " \t");
+            const collection = std.mem.trim(u8, content[in_pos + 4 ..], " \t"); // +4 for " in "
             if (var_name.len == 0 or collection.len == 0) return TemplateError.InvalidSyntax;
             // Basic validation: loop variable name shouldn't contain spaces
             if (std.mem.indexOfScalar(u8, var_name, ' ') != null) return TemplateError.InvalidSyntax;
             try tokens.append(.{ .for_start = .{ .var_name = var_name, .collection = collection } });
-            pos = findEndOfDirective(template, pos + 5);
+            pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#endfor")) {
-            const line_content = getDirectiveContent(template, pos, 7);
+            first_tag_found = true;
+            const tag_len = 7;
+            const line_content = getDirectiveContent(template, pos, tag_len);
             // Allow only whitespace after #endfor
-            if (line_content.len > 0 and std.mem.indexOfNone(u8, line_content, " \t") != null) {
+            if (std.mem.indexOfNone(u8, line_content, " \t") != null) {
                 return TemplateError.InvalidSyntax;
             }
-            first_tag_found = true;
             try tokens.append(.endfor_stmt);
-            pos = findEndOfDirective(template, pos + 7);
+            pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#while ")) {
             first_tag_found = true;
-            const condition_str = getDirectiveContent(template, pos, 7);
-            const condition = try parseCondition(allocator, condition_str); // Uses updated parseCondition
+            const tag_len = 7;
+            const condition_str = getDirectiveContent(template, pos, tag_len);
+            const condition = try parseCondition(allocator, condition_str);
             try tokens.append(.{ .while_start = condition });
-            pos = findEndOfDirective(template, pos + 7);
+            pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#endwhile")) {
-            const line_content = getDirectiveContent(template, pos, 9);
+            first_tag_found = true;
+            const tag_len = 9;
+            const line_content = getDirectiveContent(template, pos, tag_len);
             // Allow only whitespace after #endwhile
-            if (line_content.len > 0 and std.mem.indexOfNone(u8, line_content, " \t") != null) {
+            if (std.mem.indexOfNone(u8, line_content, " \t") != null) {
                 return TemplateError.InvalidSyntax;
             }
-            first_tag_found = true;
             try tokens.append(.endwhile_stmt);
-            pos = findEndOfDirective(template, pos + 9);
+            pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#set ")) {
             first_tag_found = true;
-            const content = getDirectiveContent(template, pos, 5);
+            const tag_len = 5;
+            const content = getDirectiveContent(template, pos, tag_len);
             const eq_pos = std.mem.indexOf(u8, content, "=") orelse return TemplateError.InvalidSetExpression;
             const var_name = std.mem.trim(u8, content[0..eq_pos], " \t");
             const value = std.mem.trim(u8, content[eq_pos + 1 ..], " \t");
@@ -291,96 +341,118 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
             // Basic validation: variable name shouldn't contain spaces
             if (std.mem.indexOfScalar(u8, var_name, ' ') != null) return TemplateError.InvalidSetExpression;
             try tokens.append(.{ .set_stmt = .{ .var_name = var_name, .value = value } });
-            pos = findEndOfDirective(template, pos + 5);
+            pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#extends ")) {
-            // Check if this is the very first non-whitespace content
+            // Check if this is the very first non-whitespace content encountered
             if (first_tag_found) return TemplateError.ExtendsMustBeFirst;
             first_tag_found = true; // Mark tag found now
 
-            var path = getDirectiveContent(template, pos, 9);
-            // Validate path is quoted string literal
+            const tag_len = 9;
+            var path = getDirectiveContent(template, pos, tag_len);
+            // Validate path is a quoted string literal
             if (path.len < 2 or !((path[0] == '"' and path[path.len - 1] == '"') or (path[0] == '\'' and path[path.len - 1] == '\''))) {
-                std.debug.print("Invalid #extends path format: '{s}'\n", .{path});
+                std.debug.print("Invalid #extends path format: must be quoted string (e.g., \"base.html\"), got: '{s}'\n", .{path});
                 return TemplateError.InvalidSyntax;
             }
-            path = path[1 .. path.len - 1]; // Extract path content
+            path = path[1 .. path.len - 1]; // Extract path content inside quotes
             if (path.len == 0) return TemplateError.InvalidSyntax; // Path cannot be empty
             try tokens.append(.{ .extends = path });
-            pos = findEndOfDirective(template, pos + 9);
+            pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#block ")) {
             first_tag_found = true;
-            const name = getDirectiveContent(template, pos, 7);
-            if (name.len == 0 or std.mem.indexOfScalar(u8, name, ' ') != null) return TemplateError.InvalidSyntax; // Block name check
+            const tag_len = 7;
+            const name = getDirectiveContent(template, pos, tag_len);
+            // Block name must exist and contain no spaces
+            if (name.len == 0 or std.mem.indexOfScalar(u8, name, ' ') != null) return TemplateError.InvalidSyntax;
             try tokens.append(.{ .block_start = name });
-            pos = findEndOfDirective(template, pos + 7);
+            pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#endblock")) {
-            const name_maybe = getDirectiveContent(template, pos, 9);
-            // Allow optional name, but only whitespace if present
-            if (name_maybe.len > 0 and std.mem.indexOfNone(u8, name_maybe, " \t") != null) {
-                const trimmed_name = std.mem.trim(u8, name_maybe, " \t");
-                // If name is specified, it shouldn't contain spaces
-                if (std.mem.indexOfScalar(u8, trimmed_name, ' ') != null) {
+            first_tag_found = true;
+            const tag_len = 9;
+            const content_after_tag = getDirectiveContent(template, pos, tag_len);
+            // Allow optional block name after #endblock, but it must be valid if present
+            if (content_after_tag.len > 0) {
+                const trimmed_name = std.mem.trim(u8, content_after_tag, " \t");
+                // If name is specified, it shouldn't contain spaces or be empty after trim
+                if (trimmed_name.len == 0 or std.mem.indexOfScalar(u8, trimmed_name, ' ') != null) {
+                    std.debug.print("Invalid optional block name after #endblock: '{s}'\n", .{content_after_tag});
                     return TemplateError.InvalidSyntax;
                 }
+                // Note: We don't currently *use* the optional name, but we validate it.
             }
-
-            first_tag_found = true;
             try tokens.append(.endblock_stmt);
-            pos = findEndOfDirective(template, pos + 9);
+            pos = findEndOfDirective(template, pos + tag_len);
         } else {
-            // Handle Text content
+            // --- Handle Text content ---
+            // This block executes if `pos` does not start with any known tag.
+            // We need to find where the text ends, which is either the end of the template
+            // or the beginning of the *next* tag.
+
+            // Define all possible delimiters that could end a text block
             const delimiters = [_][]const u8{
                 "{{",        "#if ",    "#elseif ",  "#else",     "#endif",
                 "#for ",     "#endfor", "#while ",   "#endwhile", "#set ",
                 "#extends ", "#block ", "#endblock",
             };
-            var text_end_offset: usize = remaining.len; // Assume text goes to the end initially
-            for (delimiters) |delim| {
+
+            var next_delimiter_pos: usize = remaining.len; // Assume text goes to the end initially
+
+            // Find the earliest occurrence of any delimiter
+            // Use `inline for` for compile-time known loops
+            inline for (delimiters) |delim| {
                 if (std.mem.indexOf(u8, remaining, delim)) |delim_pos| {
-                    // Found a delimiter, check if it's closer than the current end
-                    if (delim_pos < text_end_offset) {
-                        text_end_offset = delim_pos;
+                    // Found a delimiter, check if it's closer than the current minimum
+                    if (delim_pos < next_delimiter_pos) {
+                        next_delimiter_pos = delim_pos;
                     }
                 }
             }
 
-            if (text_end_offset > 0) {
-                // Found some text before the next delimiter (or end of template)
-                const text_slice = remaining[0..text_end_offset];
-                // Check if this text is purely whitespace before the first *actual* tag
+            // If next_delimiter_pos is 0, it means a tag starts *exactly* at `pos`.
+            // The `if/else if` chain above should have caught it. If not, something is wrong.
+            // However, if we found text (next_delimiter_pos > 0), process it.
+            if (next_delimiter_pos > 0) {
+                const text_slice = remaining[0..next_delimiter_pos];
+
+                // Check if this text is purely whitespace AND occurs before any tag/content
                 const is_only_whitespace = (std.mem.indexOfNone(u8, text_slice, " \t\n\r") == null);
 
                 if (!first_tag_found and is_only_whitespace) {
-                    // Skip leading whitespace before any directive/variable tag
+                    // Skip leading whitespace before the first *actual* tag or non-whitespace text
                 } else {
                     try tokens.append(.{ .text = text_slice });
-                    // Mark first tag found if we add non-whitespace text or any tag was previously found
-                    if (!is_only_whitespace) {
+                    // Mark first tag found if we add non-whitespace text,
+                    // or if any tag was previously found (even if this text is whitespace).
+                    if (!is_only_whitespace or first_tag_found) {
                         first_tag_found = true;
                     }
                 }
-                pos += text_end_offset;
+                pos += next_delimiter_pos; // Advance position past the text
             } else {
-                // text_end_offset is 0. This means a delimiter starts exactly at 'pos'.
-                // The next loop iteration will handle the delimiter.
-                // If pos is already at the end, the loop condition (pos < template.len) will fail.
-                if (pos >= template.len) {
-                    break; // End of template reached
-                }
-                // Safety check: if delimiter not handled, error out. Should not happen.
-                var delimiter_found_at_pos = false;
-                for (delimiters) |delim| {
-                    if (std.mem.startsWith(u8, remaining, delim)) {
-                        delimiter_found_at_pos = true;
-                        break;
+                // If next_delimiter_pos is 0, it implies a delimiter starts exactly at 'pos'.
+                // The outer loop's `if/else if` chain *should* handle this in the next iteration.
+                // If `pos` is already at the end, the loop condition `pos < template.len` will terminate it.
+
+                // Safety check: If we are here, `pos` should point to a known delimiter.
+                // If not, it indicates a parser logic error.
+                if (pos < template.len) { // Avoid checking beyond bounds
+                    var delimiter_found_at_pos = false;
+                    inline for (delimiters) |delim| {
+                        if (std.mem.startsWith(u8, remaining, delim)) {
+                            delimiter_found_at_pos = true;
+                            break;
+                        }
+                    }
+                    // Also check for "{{" which isn't in the `delimiters` array used for text splitting
+                    if (!delimiter_found_at_pos and !std.mem.startsWith(u8, remaining, "{{")) {
+                        std.debug.print("Parser state error: Position {d} has zero text length but doesn't start with a known delimiter.\n", .{pos});
+                        return TemplateError.InvalidSyntax; // Or a more specific internal error
                     }
                 }
-                if (!delimiter_found_at_pos and !std.mem.startsWith(u8, remaining, "{{")) {
-                    // A case where text_end_offset is 0 but no known delimiter starts here?
-                    std.debug.print("Parser state error: No text and no known delimiter at pos {d}.\n", .{pos});
-                    return TemplateError.InvalidSyntax;
-                }
-                // Otherwise, just let the next loop iteration handle the delimiter tag.
+                // If a delimiter was found (or we're at the end), the loop continues/terminates correctly.
+                // No increment to `pos` here; the tag handlers above will advance it.
+                // If pos is already >= template.len, the while loop condition handles termination.
+                if (pos >= template.len) break; // Explicitly break if at end
             }
         }
     }

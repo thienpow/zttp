@@ -1,51 +1,61 @@
 #extends "layout.zmx"
 
 #block title
-    {{ page_title // "Home Page" }} - {{ site_name // "My Site" }}
+    {{ page_title // "Home" }} - {{ site_name // "My Site" }}
 #endblock
 
 #block head_extra
-    <meta name="description" content="Welcome to the homepage of our awesome site!">
-    <!-- <link rel="stylesheet" href="/css/home-specific.css"> --> <!-- Example specific CSS -->
+    <meta name="description" content="Welcome to the zttp demo site homepage!">
+    <!-- Add any home-specific CSS/JS links here -->
 #endblock
 
 #block content
     <h2>{{ page_heading // "Welcome!" }}</h2>
 
-    <p>This is the main content specific to the <strong>index page</strong>.</p>
-    <p>It replaces the default content defined in the layout's 'content' block.</p>
+    #if post_message
+        <div style="background-color: #e0f7fa; border: 1px solid #00bcd4; padding: 10px; margin-bottom: 15px; border-radius: 4px;">
+            <strong>POST Result:</strong> {{ post_message }}
+        </div>
+    #endif
 
-    #if logged_in == "true" // Compare string value
-        <p>You are logged in as <strong>{{ username }}</strong>.</p>
+    <p>This is the main content area for the index page.</p>
+
+    #if logged_in == "true"
+        <p>Welcome back, <strong>{{ username }}</strong>!</p>
         <h3>Your Items:</h3>
-        #if items // Assuming items is JSON string "[...]" - real parsing needed for complex use
-             <p><em>(Items rendering from context string: {{ items }})</em></p>
-            <!-- Basic list display (won't parse JSON string here) -->
-            <!-- For real use, parse JSON in handler and pass structured data -->
-            <!-- or enhance template engine -->
+        <!-- SIMPLIFIED Check: Use the special 'var != ""' syntax only -->
+        <!-- This maps directly to Condition.non_empty -->
+        #if items != ""
             <ul>
-                <li>Item 1 (placeholder)</li>
-                <li>Item 2 (placeholder)</li>
+                 #for item in items
+                     <li>{{ item }}</li>
+                 #endfor
             </ul>
         #else
-            <p>You have no items.</p>
+            <p>You have no items listed (items is empty or not set).</p>
         #endif
+
     #else
-        <p>Please <a href="/login" hx-target="main" hx-boost="true">log in</a> to see personalized content.</p>
+        <p>Welcome, Guest! Please <a href="/login" hx-target="main" hx-boost="true">log in</a> or visit with <a href="/?logged_in=true">?logged_in=true</a> to see more.</p>
+        <hr>
+         <p>Or submit this simple form via POST:</p>
+        <form action="/" method="post">
+             <label for="post-username">Username:</label>
+             <input type="text" id="post-username" name="username" value="testuser">
+             <button type="submit">Submit POST</button>
+        </form>
     #endif
 
     <hr>
-    <p><em>(Debug info from context - might be removed in production)</em></p>
+    <p><em>Demo Context Values:</em></p>
     <ul>
         <li>Role: {{ role // "not set" }}</li>
-        <li>Show: {{ show // "not set" }}</li>
-        <li>Cond1: {{ cond1 // "not set" }}</li>
-        <li>Cond2: {{ cond2 // "not set" }}</li>
+        <li>Show Details: {{ show_details // "not set" }}</li>
         <li>Theme: {{ theme // "not set" }}</li>
     </ul>
 
 #endblock
 
 #block footer_extra
-    <p>Home page specific footer info.</p>
+    <p>Index page specific footer information.</p>
 #endblock

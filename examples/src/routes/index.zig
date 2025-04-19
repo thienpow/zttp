@@ -4,102 +4,160 @@ const Request = zttp.Request;
 const Response = zttp.Response;
 const Context = zttp.Context;
 
+const log = std.log.scoped(.index_handler);
+
+// Helper to safely set context with logging
+fn setCtx(ctx: *Context, key: []const u8, value: []const u8) void {
+    ctx.set(key, value) catch |err| {
+        log.err("Failed to set context '{s}': {any}", .{ key, err });
+    };
+}
+
+// Helper to get optional query param or default
+fn getQueryParam(req: *Request, key: []const u8, default_value: []const u8) []const u8 {
+    // --- FIX: Assume req.query is non-optional based on compiler error ---
+    // Directly access 'get' on req.query.
+    // This relies on zttp ensuring req.query is always a valid (possibly empty) map.
+    return req.query.get(key) orelse default_value;
+}
+
 pub fn get(req: *Request, res: *Response, ctx: *Context) void {
+    log.info("Handling GET / request", .{});
     res.status = .ok;
 
-    const request_id = ctx.get("request_id");
-    ctx.set("site_name", "My Awesome Site") catch return;
-    ctx.set("page_title", "Home Page") catch return;
-    ctx.set("page_heading", "Welcome!") catch return;
+    // --- Basic Page/Layout Info ---
+    setCtx(ctx, "site_name", "zttp Demo Site");
+    setCtx(ctx, "page_title", "Welcome Home");
+    setCtx(ctx, "page_heading", "zttp Framework Demo");
 
-    const logged_in = request_id != null;
-    //std.log.info("GET: request_id={?s}, logged_in={}", .{ request_id, logged_in });
-    ctx.set("logged_in", if (logged_in) "true" else "false") catch {
-        std.log.err("Failed to set logged_in context", .{});
-        return;
-    };
+    // --- Authentication Simulation (via query param for demo) ---
+    const is_logged_in = std.mem.eql(u8, getQueryParam(req, "logged_in", "false"), "true");
+    setCtx(ctx, "logged_in", if (is_logged_in) "true" else "false");
 
-    var username: []const u8 = "Alice";
-    if (req.query.get("username")) |query_username| {
-        blk: {
-            const decoded = res.allocator.alloc(u8, query_username.len) catch break :blk;
-            std.mem.copyForwards(u8, decoded, query_username);
-            const decoded_result = std.Uri.percentDecodeInPlace(decoded);
-            if (decoded_result.len == 0) {
-                res.allocator.free(decoded);
-                break :blk;
+    // --- User Info (conditional on login status) ---
+    var username: []const u8 = "Guest";
+    if (is_logged_in) {
+        const raw_username = getQueryParam(req, "username", "DemoUser");
+        var decoded_buf: [128]u8 = undefined;
+
+        if (raw_username.len > decoded_buf.len) {
+            log.warn("Username query param too long for decoding buffer: '{s}'", .{raw_username});
+            username = raw_username;
+        } else {
+            const original_len = raw_username.len;
+            @memcpy(decoded_buf[0..original_len], raw_username);
+
+            const decoded_slice: []u8 = std.Uri.percentDecodeInPlace(decoded_buf[0..original_len]);
+            const decoding_successful = true; // Assuming success for demo
+
+            if (decoding_successful) {
+                const dupe_result = res.allocator.dupe(u8, decoded_slice);
+                if (dupe_result) |duped_username| {
+                    username = duped_username;
+                } else |err| {
+                    log.err("Failed to allocate memory for decoded username: {any}", .{err});
+                    username = raw_username;
+                }
+            } else {
+                log.warn("Failed to decode username query param '{s}' (assuming no error/change)", .{raw_username});
+                username = raw_username;
             }
-            username = decoded_result;
-            res.allocator.free(decoded);
         }
     }
-    //std.log.info("GET: username={s}", .{username});
-    ctx.set("username", username) catch {
-        std.log.err("Failed to set username context", .{});
-        return;
-    };
+    setCtx(ctx, "username", username);
 
-    ctx.set("items", "[\"apple\", \"banana\"]") catch {
-        std.log.err("Failed to set items context", .{});
-        return;
-    };
-    const role = if (logged_in) "user" else "guest";
-    //std.log.info("GET: role={s}", .{role});
-    ctx.set("role", role) catch {
-        std.log.err("Failed to set role context", .{});
-        return;
-    };
-    const show = if (req.query.get("show")) |v| v else "false";
-    //std.log.info("GET: show={s}", .{show});
-    ctx.set("show", show) catch {
-        std.log.err("Failed to set show context", .{});
-        return;
-    };
-    const cond1 = if (req.query.get("cond1")) |v| v else "true";
-    //std.log.info("GET: cond1={s}", .{cond1});
-    ctx.set("cond1", cond1) catch {
-        std.log.err("Failed to set cond1 context", .{});
-        return;
-    };
-    const cond2 = if (req.query.get("cond2")) |v| v else "false";
-    //std.log.info("GET: cond2={s}", .{cond2});
-    ctx.set("cond2", cond2) catch {
-        std.log.err("Failed to set cond2 context", .{});
-        return;
-    };
-    const theme = if (req.query.get("theme")) |v| v else "default";
-    //std.log.info("GET: theme={s}", .{theme});
-    ctx.set("theme", theme) catch {
-        //std.log.err("Failed to set theme context", .{});
-        return;
-    };
+    // --- Data for Loops ---
+    setCtx(ctx, "items", "[ \"Apples\", \"Bananas\", \"Oranges\" ]");
 
-    //std.log.info("{s}", .{@src().file});
-    //std.log.info("{s}", .{req.path});
+    // --- Other Demo Variables ---
+    setCtx(ctx, "role", getQueryParam(req, "role", if (is_logged_in) "user" else "visitor"));
+    setCtx(ctx, "show_details", getQueryParam(req, "show", "false"));
+    setCtx(ctx, "theme", getQueryParam(req, "theme", "light"));
+
+    log.debug("Context set for GET /: logged_in={s}, username={s}, role={s}", .{
+        ctx.get("logged_in") orelse "N/A",
+        ctx.get("username") orelse "N/A",
+        ctx.get("role") orelse "N/A",
+    });
 }
 
 pub fn post(req: *Request, res: *Response, ctx: *Context) void {
+    log.info("Handling POST / request", .{});
     res.status = .ok;
 
-    var logged_in = false;
-    var username: []const u8 = "";
-    if (req.form) |form| {
-        if (form.get("username")) |form_username| {
-            username = form_username;
-            logged_in = username.len > 0;
-        }
-    }
-    //std.log.info("POST: username={s}, logged_in={}", .{ username, logged_in });
-    ctx.set("logged_in", if (logged_in) "true" else "false") catch {
-        //std.log.err("Failed to set logged_in context", .{});
-        return;
-    };
+    // --- Basic Page/Layout Info ---
+    setCtx(ctx, "site_name", "zttp Demo Site");
+    setCtx(ctx, "page_title", "POST Received");
+    setCtx(ctx, "page_heading", "Form Submission");
 
-    ctx.set("username", username) catch return;
-    ctx.set("items", "[\"apple\", \"banana\"]") catch return;
-    ctx.set("role", if (logged_in) "user" else "guest") catch return;
-    ctx.set("show", if (req.query.get("show")) |v| v else "false") catch return;
-    ctx.set("cond1", if (req.query.get("cond1")) |v| v else "true") catch return;
-    ctx.set("cond2", if (req.query.get("cond2")) |v| v else "false") catch return;
-    ctx.set("theme", if (req.query.get("theme")) |v| v else "default") catch return;
+    // --- Process Form Data ---
+    var username: []const u8 = "Guest";
+    var is_logged_in = false;
+    var submitted_data = std.ArrayList(u8).init(res.allocator);
+    defer submitted_data.deinit();
+
+    if (req.form) |form| {
+        const writer = submitted_data.writer();
+        _ = writer.print("Received Form Data: ", .{}) catch {};
+        var first = true;
+
+        var it = form.iterator();
+        while (it.next()) |entry| {
+            if (!first) {
+                _ = writer.print(", ", .{}) catch {};
+            }
+            // Assuming .key_ptr/.value_ptr based on previous iterations
+            const key = entry.key_ptr.*;
+            const value = entry.value_ptr.*;
+            _ = writer.print("{s}={s}", .{ key, value }) catch {};
+
+            if (std.mem.eql(u8, key, "username")) {
+                if (value.len > 0) {
+                    const dupe_result = res.allocator.dupe(u8, value);
+                    if (dupe_result) |duped_username| {
+                        username = duped_username;
+                    } else |err| {
+                        log.err("Failed to allocate memory for form username: {any}", .{err});
+                        username = "Guest";
+                        is_logged_in = false;
+                        break;
+                    }
+                    is_logged_in = (username.len > 0 and !std.mem.eql(u8, username, "Guest"));
+                } else {
+                    username = "Guest";
+                    is_logged_in = false;
+                }
+            }
+            first = false;
+        }
+    } else {
+        log.warn("req.form is null in POST handler", .{});
+        _ = submitted_data.writer().print("No form data received or parsed.", .{}) catch {};
+    }
+
+    setCtx(ctx, "logged_in", if (is_logged_in) "true" else "false");
+    setCtx(ctx, "username", username);
+
+    // --- FIX: Use explicit if/else for post_message dupe ---
+    var post_msg_for_ctx: []const u8 = ""; // Variable to hold the final message
+    const post_msg_dupe_result = res.allocator.dupe(u8, submitted_data.items);
+    if (post_msg_dupe_result) |duped_msg| {
+        post_msg_for_ctx = duped_msg; // Assign success result
+    } else |err| {
+        log.err("Failed to dupe post_message: {any}", .{err});
+        post_msg_for_ctx = "Error creating POST message"; // Assign fallback
+    }
+    // Now assign the final value to the context
+    setCtx(ctx, "post_message", post_msg_for_ctx);
+
+    // --- Set other variables for POST response page ---
+    setCtx(ctx, "items", "[]");
+    setCtx(ctx, "role", if (is_logged_in) "user" else "visitor");
+    setCtx(ctx, "show_details", "false");
+    setCtx(ctx, "theme", "light");
+
+    log.debug("Context set for POST /: logged_in={s}, username={s}", .{
+        ctx.get("logged_in") orelse "N/A",
+        ctx.get("username") orelse "N/A",
+    });
 }

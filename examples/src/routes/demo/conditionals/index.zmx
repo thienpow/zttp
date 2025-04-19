@@ -1,73 +1,117 @@
 #extends "layout.zmx"
 
 #block title
-{{ page_title // "Demo" }} - Conditionals Showcase
+    {{ page_title // "Demo" }} - Conditionals Showcase - {{ site_name // "zttp Demos" }}
 #endblock
 
 #block content
-<h1>Conditional Logic Examples</h1>
+    <h1>Conditional Logic Examples</h1>
+    <p>Testing various conditional structures supported by the template engine.</p>
+    <hr>
 
-<hr>
-
-<h2>Example 1: Simple Truthiness &amp; Else</h2>
-<p>Checks if a variable 'user' is considered true (exists and is not false/null/empty).</p>
-#if user
-    <p>Welcome back, <strong>{{ user.name }}</strong>!</p>
-#else
-    <p>Welcome, Guest! Please <a href="/login">login</a>.</p>
-#endif
-
-<hr>
-
-<h2>Example 2: Equality, Inequality &amp; ElseIf</h2>
-<p>Checks the value of a 'status' variable.</p>
-#if status == "active"
-    <p>Account Status: <span style="color: green;">Active</span></p>
-#elseif status == "pending"
-    <p>Account Status: <span style="color: orange;">Pending Activation</span></p>
-#elseif status == "suspended"
-    <p>Account Status: <span style="color: red;">Suspended</span></p>
-#else
-    <p>Account Status: <span style="color: grey;">Unknown or Inactive</span></p>
-#endif
-
-<hr>
-
-<h2>Example 3: Numeric Comparisons</h2>
-<p>Checks the value of an 'item_count' variable.</p>
-#if item_count > 10
-    <p>You have lots of items ({{ item_count }})!</p>
-#elseif item_count > 0
-    <p>You have {{ item_count }} item(s).</p>
-#else
-    <p>Your cart is empty.</p>
-#endif
-
-<hr>
-
-<h2>Example 4: Logical Operators (and/or)</h2>
-<p>Checks 'is_admin' and 'has_special_permission' flags.</p>
-#if is_admin and has_special_permission
-    <p>Access Level: Super Admin (Admin with Special Permissions)</p>
-#elseif is_admin or has_special_permission
-    #if is_admin
-        <p>Access Level: Standard Admin</p>
+    <h2>Example 1: Simple Truthiness &amp; Else</h2>
+    <p>Checks if a variable 'user' is considered true (exists and is not false/null/empty).</p>
+    #if user
+        <p>Welcome back, <strong>{{ user.name // "Unknown User" }}</strong>!</p>
     #else
-        <p>Access Level: User with Special Permissions</p>
+        <p>Welcome, Guest! Please <a href="/login">login</a>.</p>
     #endif
-#else
-    <p>Access Level: Standard User</p>
-#endif
 
-<hr>
+    <hr>
 
-<h2>Example 5: Non-Empty Check (Implicit)</h2>
-<p>Checks if the 'messages' variable exists and is not an empty string.</p>
-#if messages != ""
-    <p><strong>You have new messages!</strong></p>
-#else
-    <p>No new messages.</p>
-#endif
+    <h2>Example 2: Equality, Inequality &amp; ElseIf</h2>
+    <p>Checks the value of a 'status' variable (current value: {{ status }}).</p>
+    #if status == "active"
+        <p>Account Status: <span style="color: green;">Active</span></p>
+    #elseif status == "pending"
+        <p>Account Status: <span style="color: orange;">Pending Activation</span></p>
+    #elseif status == "suspended"
+        <p>Account Status: <span style="color: red;">Suspended</span></p>
+    #else
+        <p>Account Status: <span style="color: grey;">Unknown or Inactive</span></p>
+    #endif
 
-<hr>
+    <hr>
+
+    <h2>Example 3: Numeric Comparisons (String-based)</h2>
+    <p>Checks the value of an 'item_count' variable (current value: {{ item_count }}).</p>
+    #if item_count > 10
+        <p>You have lots of items ({{ item_count }})!</p>
+    #elseif item_count > 0
+        <p>You have {{ item_count }} item(s).</p>
+    #else
+        <p>Your cart is empty.</p>
+    #endif
+
+    <hr>
+
+    <h2>Example 4: Logical Operators (and/or)</h2>
+    <p>Checks 'is_admin' ({{ is_admin }}) and 'has_special_permission' ({{ has_special_permission }}) flags.</p>
+    #if is_admin and has_special_permission
+        <p>Access Level: Super Admin (Admin with Special Permissions)</p>
+    #elseif is_admin or has_special_permission
+        #if is_admin
+            <p>Access Level: Standard Admin</p>
+        #else
+            <p>Access Level: User with Special Permissions</p>
+        #endif
+    #else
+        <p>Access Level: Standard User</p>
+    #endif
+
+    <hr>
+
+    <h2>Example 5: Non-Empty Check (Special Syntax)</h2>
+    <p>Checks if the 'messages' variable exists and is not an empty string (current length: {{ messages.len // 0 }}).</p>
+    #if messages != ""
+        <p><strong>Messages:</strong> {{ messages }}</p>
+    #else
+        <p>No new messages.</p>
+    #endif
+
+    <hr>
+
+    <h2>Example 6: Variable vs. Variable Comparison</h2>
+    <p>Checks if 'user_role' ({{ user_role }}) matches 'required_role' ({{ required_role }}).</p>
+    #if user_role == required_role
+        <p style="color: green;">Access Granted: Role matches requirement.</p>
+    #else
+        <p style="color: red;">Access Denied: Role does not meet requirement.</p>
+    #endif
+
+    <hr>
+
+    <h2>Example 7: Greater/Less Than or Equal (String-based)</h2>
+    <p>Checks 'score' ({{ score }}) against 'passing_score' ({{ passing_score }}) and 'max_score' ({{ max_score }}).</p>
+    #if score >= passing_score
+        <p>Result: <strong style="color: green;">Pass</strong> (Score {{ score }} >= {{ passing_score }})</p>
+        #if score == max_score
+            <p>Perfect score!</p>
+        #endif
+    #else
+        <p>Result: <strong style="color: red;">Fail</strong> (Score {{ score }} < {{ passing_score }})</p>
+    #endif
+
+    <hr>
+
+    <h2>Example 8: Logical Operator Precedence/Grouping</h2>
+    <p>Checks `(permission_a and permission_b) or emergency_override`.</p>
+    <p>Values: permission_a={{ permission_a }}, permission_b={{ permission_b }}, emergency_override={{ emergency_override }}</p>
+    #if (permission_a and permission_b) or emergency_override
+        <p style="color: green;"><strong>Action Allowed:</strong> Either both permissions are true, OR emergency override is active.</p>
+    #else
+        <p style="color: red;"><strong>Action Denied:</strong> Requires (A and B) or Override.</p>
+    #endif
+
+    <hr>
+
+    <h2>Example 9: Single Quotes &amp; General Inequality</h2>
+    <p>Checks if 'user_preference' ({{ user_preference }}) is not equal to 'light' using single quotes.</p>
+    #if user_preference != 'light'
+        <p>User theme preference is not 'light'. It is '{{ user_preference }}'.</p>
+    #else
+        <p>User theme preference is 'light'.</p>
+    #endif
+
+    <hr>
 #endblock

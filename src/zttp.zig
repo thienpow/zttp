@@ -129,6 +129,8 @@ pub const ServerBundle = struct {
             std.log.info("Registering route: {s} {s}", .{ @tagName(r.method), r.path });
             try self.server.route(r.module_name, r.method, r.path, r.handler, r.template_path);
         }
+
+        try Template.cache.preloadLayoutTemplates();
     }
 };
 

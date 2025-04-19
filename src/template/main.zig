@@ -1,6 +1,6 @@
 // src/template.main.zig
 const std = @import("std");
-const cache = @import("cache.zig");
+pub const cache = @import("cache.zig");
 const parser = @import("parser.zig");
 const renderer = @import("renderer.zig");
 const types = @import("types.zig");

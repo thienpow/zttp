@@ -251,24 +251,18 @@ pub fn renderTokens(
 
             .variable => |var_name_expr| {
                 var value_to_render: []const u8 = "";
-                // Handle default value operator "//"
                 if (std.mem.indexOf(u8, var_name_expr, "//")) |sep_pos| {
                     const name = std.mem.trim(u8, var_name_expr[0..sep_pos], " \t");
                     const default_expr = std.mem.trim(u8, var_name_expr[sep_pos + 2 ..], " \t");
-                    var default_value: []const u8 = default_expr; // Assume default is literal unless quoted
-
-                    // Check if default itself is a string literal
+                    var default_value: []const u8 = default_expr;
                     if (default_expr.len >= 2 and default_expr[0] == '"' and default_expr[default_expr.len - 1] == '"') {
                         default_value = default_expr[1 .. default_expr.len - 1];
                     } else if (default_expr.len >= 2 and default_expr[0] == '\'' and default_expr[default_expr.len - 1] == '\'') {
                         default_value = default_expr[1 .. default_expr.len - 1];
                     }
-                    // If not quoted, default_value remains default_expr (treated as literal)
-
                     value_to_render = ctx.get(name) orelse default_value;
                 } else {
-                    // No default, just look up the variable name
-                    value_to_render = ctx.get(var_name_expr) orelse ""; // Render empty string if not found
+                    value_to_render = ctx.get(var_name_expr) orelse "";
                 }
                 try output.appendSlice(value_to_render);
             },
@@ -450,64 +444,49 @@ pub fn renderTokens(
                 if (loop_end_idx == null) return TemplateError.MissingEndfor;
                 const end_idx = loop_end_idx.?;
 
-                const collection_val_str = ctx.get(loop.collection) orelse ""; // Default to empty string if collection var not found
+                const collection_val_str = ctx.get(loop.collection) orelse "";
 
-                // Arena allocator for temporary items during this loop execution
+                // Arena allocator for temporary items
                 var items_allocator = std.heap.ArenaAllocator.init(allocator);
                 defer items_allocator.deinit();
                 const item_alloc = items_allocator.allocator();
                 var loop_items = std.ArrayList([]const u8).init(item_alloc);
-                // No defer needed for loop_items with arena
 
-                // --- Item Parsing Logic ---
-                // Attempt to parse as JSON array first
+                // Parse JSON array
                 var parsed_json = false;
                 if (collection_val_str.len >= 2 and collection_val_str[0] == '[' and collection_val_str[collection_val_str.len - 1] == ']') {
                     const parse_options = std.json.ParseOptions{ .duplicate_field_behavior = .use_first };
-                    const json_result = std.json.parseFromSlice(std.json.Value, item_alloc, collection_val_str, parse_options) catch |err| {
-                        std.debug.print("Warning: Failed to parse for loop collection '{s}' as JSON array ({any}), falling back to comma separation.\n", .{ loop.collection, err });
-                        return;
-                    };
-
+                    const json_result = std.json.parseFromSlice(std.json.Value, item_alloc, collection_val_str, parse_options) catch return;
                     const parsed = json_result.value;
                     if (parsed == .array) {
                         const json_array = parsed.array;
                         try loop_items.ensureTotalCapacity(json_array.items.len);
                         for (json_array.items) |item| {
-                            // Stringify item back to string for loop var consistency
-                            var item_str_buffer = std.ArrayList(u8).init(item_alloc);
-                            try std.json.stringify(item, .{}, item_str_buffer.writer());
-                            const item_str = try item_str_buffer.toOwnedSlice();
-                            try loop_items.append(item_str);
+                            if (item == .string) {
+                                try loop_items.append(try item_alloc.dupe(u8, item.string));
+                            }
                         }
                         parsed_json = true;
-                    } else {
-                        std.debug.print("Warning: For loop collection '{s}' is valid JSON but not an array.\n", .{loop.collection});
                     }
                 }
 
-                // Fallback: Comma-separated string list (if not parsed as JSON or not JSON format)
+                // Fallback: Comma-separated string list
                 if (!parsed_json and collection_val_str.len > 0) {
                     var it = std.mem.splitScalar(u8, collection_val_str, ',');
                     while (it.next()) |item_part| {
                         const trimmed_item = std.mem.trim(u8, item_part, " \t");
-                        // Add even if empty after trimming? Decide based on desired behavior.
-                        // if (trimmed_item.len > 0) {
                         try loop_items.append(try item_alloc.dupe(u8, trimmed_item));
-                        // }
                     }
                 }
-                // --- End Item Parsing ---
 
-                // Execute the loop body
+                // Execute loop
                 if (loop_items.items.len == 0) {
-                    i = end_idx; // Skip the loop body entirely
+                    i = end_idx;
                 } else {
-                    // Save the original value of the loop variable
                     const original_value = ctx.get(loop.var_name);
                     var original_value_copy: ?[]const u8 = null;
                     if (original_value) |ov| {
-                        original_value_copy = try allocator.dupe(u8, ov); // Duplicate with main allocator
+                        original_value_copy = try allocator.dupe(u8, ov);
                         defer if (original_value_copy) |ovc| allocator.free(ovc);
                     }
 
@@ -515,26 +494,17 @@ pub fn renderTokens(
                     const loop_body_end = end_idx;
 
                     for (loop_items.items) |item_value| {
-                        // Set the loop variable in the context for this iteration
-                        // Need to duplicate item_value as it belongs to the loop's arena
-                        const item_copy = try allocator.dupe(u8, item_value);
-                        errdefer allocator.free(item_copy);
-                        try ctx.setOwned(loop.var_name, item_copy); // ctx takes ownership
-
-                        // Recursively render the loop body
+                        try ctx.setOwned(loop.var_name, try allocator.dupe(u8, item_value));
                         try renderTokens(allocator, tokens, loop_body_start, loop_body_end, ctx, output, block_content_map);
                     }
 
-                    // Restore the original value or remove the loop variable
                     if (original_value_copy) |ovc| {
-                        // Duplicate again for restoration as ovc will be freed by defer
                         const restore_copy = try allocator.dupe(u8, ovc);
-                        errdefer allocator.free(restore_copy);
                         try ctx.setOwned(loop.var_name, restore_copy);
                     } else {
-                        _ = ctx.remove(loop.var_name); // Remove if it didn't exist before
+                        _ = ctx.remove(loop.var_name);
                     }
-                    i = end_idx; // Move instruction pointer past the #endfor
+                    i = end_idx;
                 }
                 depth_for -= 1;
             },

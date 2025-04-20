@@ -110,6 +110,10 @@ pub fn getTemplates(allocator: std.mem.Allocator) ![]const Template {
         .buffer = @embedFile("routes/about.zmx"),
     });
     try templates.append(Template{
+        .name = try allocator.dupe(u8, "components/button"),
+        .buffer = @embedFile("routes/components/button.zmx"),
+    });
+    try templates.append(Template{
         .name = try allocator.dupe(u8, "demo/conditionals/index"),
         .buffer = @embedFile("routes/demo/conditionals/index.zmx"),
     });

@@ -624,6 +624,24 @@ pub fn renderTokens(
                 std.log.err("Encountered #extends token during recursive renderTokens call.", .{});
                 return TemplateError.InvalidSyntax;
             },
+            .include => |path| {
+                // Retrieve tokens from cache
+                const token_list_ptr = try cache.getTokens(path) orelse {
+                    std.log.err("Template not found in cache: '{s}'", .{path});
+                    return TemplateError.FileNotFound;
+                };
+
+                // Render included tokens
+                try renderTokens(
+                    allocator,
+                    token_list_ptr.items,
+                    0,
+                    token_list_ptr.items.len,
+                    ctx,
+                    output,
+                    block_content_map,
+                );
+            },
         }
     }
 

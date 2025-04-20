@@ -18,6 +18,7 @@ pub const TemplateError = error{
     NestedExtendsNotSupported,
     PathResolutionError,
     ParseIntError,
+    CircularInclude,
 };
 
 pub const CacheError = error{
@@ -53,6 +54,7 @@ pub const SetStmtPayload = struct {
 };
 
 pub const Token = union(enum) {
+    include: []const u8,
     text: []const u8,
     variable: []const u8,
     if_start: Condition,

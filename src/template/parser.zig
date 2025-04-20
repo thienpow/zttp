@@ -257,6 +257,19 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
             if (var_name.len == 0) return TemplateError.InvalidSyntax; // Variable name cannot be empty
             try tokens.append(.{ .variable = try allocator.dupe(u8, var_name) });
             pos = end + 2; // Move past "}}"
+        } else if (std.mem.startsWith(u8, remaining, "#include ")) {
+            first_tag_found = true;
+            const tag_len = 9; // Length of "#include "
+            var path = getDirectiveContent(template, pos, tag_len);
+            // Validate path is a quoted string
+            if (path.len < 2 or !((path[0] == '"' and path[path.len - 1] == '"') or (path[0] == '\'' and path[path.len - 1] == '\''))) {
+                std.debug.print("Invalid #include path: must be quoted (e.g., \"components/button\"), got: '{s}'\n", .{path});
+                return TemplateError.InvalidSyntax;
+            }
+            path = path[1 .. path.len - 1]; // Extract content inside quotes
+            if (path.len == 0) return TemplateError.InvalidSyntax;
+            try tokens.append(.{ .include = try allocator.dupe(u8, path) });
+            pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#if ")) {
             first_tag_found = true;
             const tag_len = 4;
@@ -390,9 +403,9 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
 
             // Define all possible delimiters that could end a text block
             const delimiters = [_][]const u8{
-                "{{",        "#if ",    "#elseif ",  "#else",     "#endif",
-                "#for ",     "#endfor", "#while ",   "#endwhile", "#set ",
-                "#extends ", "#block ", "#endblock",
+                "{{",      "#include ", "#if ",    "#elseif ",  "#else", "#endif",
+                "#for ",   "#endfor",   "#while ", "#endwhile", "#set ", "#extends ",
+                "#block ", "#endblock",
             };
 
             var next_delimiter_pos: usize = remaining.len; // Assume text goes to the end initially

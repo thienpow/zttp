@@ -9,4 +9,5 @@
     <p>This is the about page for {{ site_name // "our website" }}.</p>
     <p>We are demonstrating the features of the zttp web framework for Zig.</p>
     <p>This page uses the default layout.</p>
+    #include "components/button"
 #endblock

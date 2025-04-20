@@ -22,13 +22,43 @@ pub const Context = struct {
     }
 
     pub fn set(self: *Context, key: []const u8, value: []const u8) !void {
-        if (self.data.get(key)) |old| self.allocator.free(old);
-        try self.data.put(
-            try self.allocator.dupe(u8, key),
-            try self.allocator.dupe(u8, value),
-        );
+        const key_copy = try self.allocator.dupe(u8, key);
+        errdefer self.allocator.free(key_copy);
+
+        const value_copy = try self.allocator.dupe(u8, value);
+        errdefer self.allocator.free(value_copy);
+
+        // Use 'try' to handle potential errors from fetchPut
+        const maybe_old_entry = try self.data.fetchPut(key_copy, value_copy);
+
+        // Now check the optional result
+        if (maybe_old_entry) |old_entry| {
+            // Free the PREVIOUS key and value that were replaced
+            self.allocator.free(old_entry.key);
+            self.allocator.free(old_entry.value);
+        }
     }
 
+    pub fn setOwned(self: *Context, key: []const u8, value: []const u8) !void {
+        // 'value' is already owned by the caller, 'key' needs duplication.
+        const key_copy = try self.allocator.dupe(u8, key);
+        // If key duplication or put fails, free the key_copy.
+        // The caller still owns 'value' if put fails.
+        errdefer self.allocator.free(key_copy);
+
+        // Use 'try' to handle potential errors from fetchPut
+        const maybe_old_entry = try self.data.fetchPut(key_copy, value);
+
+        // Now check the optional result
+        if (maybe_old_entry) |old_entry| {
+            // Free the PREVIOUS key and value
+            self.allocator.free(old_entry.key);
+            self.allocator.free(old_entry.value);
+            // 'value' passed in is now owned by the map upon successful put.
+        }
+        // If fetchPut fails (e.g. OOM), key_copy is freed by errdefer.
+        // The original 'value' is NOT freed here, ownership remains with caller on error.
+    }
     pub fn get(self: *Context, key: []const u8) ?[]const u8 {
         return self.data.get(key);
     }
@@ -44,13 +74,8 @@ pub const Context = struct {
         return false;
     }
 
-    pub fn setOwned(self: *Context, key: []const u8, value: []const u8) !void {
-        const key_copy = try self.allocator.dupe(u8, key);
-        errdefer self.allocator.free(key_copy);
-        try self.data.put(key_copy, value);
-    }
-
     pub fn remove(self: *Context, key: []const u8) bool {
+        // fetchRemove returns ?KV (no error), so this is correct.
         if (self.data.fetchRemove(key)) |removed_entry| {
             self.allocator.free(removed_entry.key);
             self.allocator.free(removed_entry.value);

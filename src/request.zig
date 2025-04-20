@@ -237,5 +237,11 @@ fn parseMultipart(allocator: std.mem.Allocator, body: []const u8, boundary: []co
 fn parseMethod(method_str: []const u8) !HttpMethod {
     if (std.mem.eql(u8, method_str, "GET")) return .get;
     if (std.mem.eql(u8, method_str, "POST")) return .post;
+    if (std.mem.eql(u8, method_str, "PUT")) return .put;
+    if (std.mem.eql(u8, method_str, "DELETE")) return .delete;
+    if (std.mem.eql(u8, method_str, "PATCH")) return .patch;
+    if (std.mem.eql(u8, method_str, "HEAD")) return .head;
+    if (std.mem.eql(u8, method_str, "OPTIONS")) return .options;
+    if (std.mem.eql(u8, method_str, "TRACE")) return .trace;
     return error.InvalidMethod;
 }

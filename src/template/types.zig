@@ -20,6 +20,13 @@ pub const TemplateError = error{
     ParseIntError,
 };
 
+pub const CacheError = error{
+    CacheNotInitialized,
+    InvalidValue, // May not be needed anymore if accessCache is removed
+    TokenizationFailed,
+    OutOfMemory, // Often implicitly handled by allocator failures
+};
+
 // Define ComparisonData first so it can be used in Condition
 pub const ComparisonData = struct {
     var_name: []const u8,

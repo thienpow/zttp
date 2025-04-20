@@ -146,7 +146,7 @@ pub const ServerBundle = struct {
         try cache.initTemplateCache(self.allocator, @intCast(templates.len));
 
         for (templates) |t| {
-            _ = try cache.accessCache(.put, t.name, t.buffer);
+            _ = try cache.putTokenizedTemplate(t.name, t.buffer);
         }
     }
 };

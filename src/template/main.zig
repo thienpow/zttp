@@ -12,12 +12,12 @@ pub fn renderTemplate(
     path: []const u8,
     ctx: *Context,
 ) !?[]const u8 {
-    const template_cache = cache.accessCache(.get, path, null) catch |err| {
-        std.log.err("Failed to get template {s}: {}", .{ path, err });
+    const tokens_ptr = cache.getTokens(path) catch |err| {
+        std.log.err("Failed to lookup template tokens {s}: {}", .{ path, err });
         return null;
     };
 
-    const template_content = template_cache orelse return null;
+    const cached_tokens = tokens_ptr orelse return null;
 
     // Check if the request is from HTMX
     const is_htmx = if (ctx.get("is_htmx")) |value|
@@ -25,8 +25,7 @@ pub fn renderTemplate(
     else
         false;
 
-    var content_tokens = try parser.tokenize(allocator, template_content);
-    defer content_tokens.deinit();
+    const content_tokens = cached_tokens.*;
 
     var layout_rel_path: ?[]const u8 = null;
     var first_real_token_index: ?usize = null;
@@ -105,9 +104,8 @@ pub fn renderTemplate(
 
     // Existing layout rendering logic for non-HTMX requests
     if (layout_rel_path) |layout_path_from_tag| {
-
-        // Check cache for layout
-        const layout_cache = try cache.accessCache(.get, layout_path_from_tag, null);
+        const layout_tokens_ptr = try cache.getTokens(layout_path_from_tag);
+        const layout_tokens_list = layout_tokens_ptr orelse return TemplateError.LayoutNotFound;
 
         var block_content_map = std.StringHashMap([]const u8).init(allocator);
         defer {
@@ -173,18 +171,11 @@ pub fn renderTemplate(
 
         if (capture_block_depth != 0) return TemplateError.MissingEndblock;
 
-        var layout_tokens = try parser.tokenize(allocator, layout_cache.?);
-        defer layout_tokens.deinit();
-
-        for (layout_tokens.items) |lt| {
-            if (lt == .extends) return TemplateError.NestedExtendsNotSupported;
-        }
-
         try renderer.renderTokens(
             allocator,
-            layout_tokens.items,
+            layout_tokens_list.*.items,
             0,
-            layout_tokens.items.len,
+            layout_tokens_list.*.items.len,
             ctx,
             &output,
             &block_content_map,

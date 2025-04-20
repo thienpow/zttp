@@ -197,7 +197,7 @@ pub fn parseCondition(allocator: std.mem.Allocator, content: []const u8) Templat
                             return TemplateError.InvalidSyntax;
                         }
                     }
-                    return Condition{ .non_empty = var_name };
+                    return Condition{ .non_empty = try allocator.dupe(u8, var_name) };
                 } else {
                     // This could happen if there was whitespace like `var != "  "` which trims to `""`
                     // but isn't the intended non_empty check. Treat as regular comparison.
@@ -208,8 +208,8 @@ pub fn parseCondition(allocator: std.mem.Allocator, content: []const u8) Templat
 
             // Construct the appropriate comparison condition
             const comparison_data = ComparisonData{
-                .var_name = var_name,
-                .value = value_content,
+                .var_name = try allocator.dupe(u8, var_name),
+                .value = try allocator.dupe(u8, value_content),
                 .is_literal = is_literal,
             };
 
@@ -231,7 +231,7 @@ pub fn parseCondition(allocator: std.mem.Allocator, content: []const u8) Templat
     if (trimmed.len == 0) return TemplateError.InvalidSyntax; // Should have been caught earlier, but safety check.
     // Could add stricter validation here (e.g., check allowed identifier characters) if needed.
     // For now, accept any non-empty string that wasn't parsed as something else.
-    return Condition{ .simple = trimmed };
+    return Condition{ .simple = try allocator.dupe(u8, trimmed) };
 }
 
 /// Tokenizes the template content into a sequence of Tokens.
@@ -255,7 +255,7 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
             const end = start + end_offset;
             const var_name = std.mem.trim(u8, template[start..end], " \t");
             if (var_name.len == 0) return TemplateError.InvalidSyntax; // Variable name cannot be empty
-            try tokens.append(.{ .variable = var_name });
+            try tokens.append(.{ .variable = try allocator.dupe(u8, var_name) });
             pos = end + 2; // Move past "}}"
         } else if (std.mem.startsWith(u8, remaining, "#if ")) {
             first_tag_found = true;
@@ -301,7 +301,7 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
             if (var_name.len == 0 or collection.len == 0) return TemplateError.InvalidSyntax;
             // Basic validation: loop variable name shouldn't contain spaces
             if (std.mem.indexOfScalar(u8, var_name, ' ') != null) return TemplateError.InvalidSyntax;
-            try tokens.append(.{ .for_start = .{ .var_name = var_name, .collection = collection } });
+            try tokens.append(.{ .for_start = .{ .var_name = try allocator.dupe(u8, var_name), .collection = try allocator.dupe(u8, collection) } });
             pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#endfor")) {
             first_tag_found = true;
@@ -340,7 +340,7 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
             if (var_name.len == 0 or value.len == 0) return TemplateError.InvalidSetExpression;
             // Basic validation: variable name shouldn't contain spaces
             if (std.mem.indexOfScalar(u8, var_name, ' ') != null) return TemplateError.InvalidSetExpression;
-            try tokens.append(.{ .set_stmt = .{ .var_name = var_name, .value = value } });
+            try tokens.append(.{ .set_stmt = .{ .var_name = try allocator.dupe(u8, var_name), .value = try allocator.dupe(u8, value) } });
             pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#extends ")) {
             // Check if this is the very first non-whitespace content encountered
@@ -356,7 +356,7 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
             }
             path = path[1 .. path.len - 1]; // Extract path content inside quotes
             if (path.len == 0) return TemplateError.InvalidSyntax; // Path cannot be empty
-            try tokens.append(.{ .extends = path });
+            try tokens.append(.{ .extends = try allocator.dupe(u8, path) });
             pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#block ")) {
             first_tag_found = true;
@@ -364,7 +364,7 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
             const name = getDirectiveContent(template, pos, tag_len);
             // Block name must exist and contain no spaces
             if (name.len == 0 or std.mem.indexOfScalar(u8, name, ' ') != null) return TemplateError.InvalidSyntax;
-            try tokens.append(.{ .block_start = name });
+            try tokens.append(.{ .block_start = try allocator.dupe(u8, name) });
             pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#endblock")) {
             first_tag_found = true;
@@ -420,7 +420,7 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
                 if (!first_tag_found and is_only_whitespace) {
                     // Skip leading whitespace before the first *actual* tag or non-whitespace text
                 } else {
-                    try tokens.append(.{ .text = text_slice });
+                    try tokens.append(.{ .text = try allocator.dupe(u8, text_slice) });
                     // Mark first tag found if we add non-whitespace text,
                     // or if any tag was previously found (even if this text is whitespace).
                     if (!is_only_whitespace or first_tag_found) {

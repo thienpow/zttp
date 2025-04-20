@@ -1,3 +1,4 @@
+// src/zttp.zig
 const std = @import("std");
 pub const Server = @import("server.zig").Server;
 pub const ThreadPool = @import("pool.zig").ThreadPool;
@@ -8,7 +9,7 @@ pub const MiddlewareFn = @import("router.zig").MiddlewareFn;
 pub const HandlerFn = @import("router.zig").HandlerFn;
 pub const NextFn = @import("router.zig").NextFn;
 pub const Router = @import("router.zig").Router;
-pub const Template = @import("template/main.zig");
+pub const cache = @import("template/main.zig").cache;
 pub const Middleware = @import("middleware/mod.zig");
 
 pub const HttpMethod = enum {
@@ -34,8 +35,12 @@ pub const Route = struct {
     module_name: []const u8,
     method: HttpMethod,
     path: []const u8,
-    template_path: []const u8,
     handler: HandlerFn,
+};
+
+pub const Template = struct {
+    name: []const u8,
+    buffer: []const u8,
 };
 
 pub fn createServer(
@@ -126,11 +131,23 @@ pub const ServerBundle = struct {
         }
 
         for (routes) |r| {
-            std.log.info("Registering route: {s} {s}", .{ @tagName(r.method), r.path });
-            try self.server.route(r.module_name, r.method, r.path, r.handler, r.template_path);
+            try self.server.route(r.module_name, r.method, r.path, r.handler);
+        }
+    }
+
+    pub fn loadTemplates(self: *ServerBundle, comptime getTemplatesFn: fn (std.mem.Allocator) anyerror![]const Template) !void {
+        const templates = try getTemplatesFn(self.allocator);
+
+        if (templates.len == 0) {
+            std.log.warn("No templates loaded", .{});
         }
 
-        try Template.cache.preloadLayoutTemplates();
+        // Initialize the template cache with capacity for all templates
+        try cache.initTemplateCache(self.allocator, @intCast(templates.len));
+
+        for (templates) |t| {
+            _ = try cache.accessCache(.put, t.name, t.buffer);
+        }
     }
 };
 

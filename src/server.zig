@@ -21,10 +21,6 @@ pub const Server = struct {
     pool: *ThreadPool,
 
     pub fn init(allocator: std.mem.Allocator, port: u16, pool: *ThreadPool) Server {
-        Template.initTemplateCache(allocator) catch |err| {
-            std.log.err("Failed to initialize template cache: {}", .{err});
-            @panic("Template cache initialization failed");
-        };
         return .{
             .allocator = allocator,
             .listener = null,
@@ -40,11 +36,10 @@ pub const Server = struct {
             listener.deinit();
         }
         self.router.deinit();
-        Template.deinitTemplateCache();
     }
 
-    pub fn route(self: *Server, module_name: []const u8, method: HttpMethod, path: []const u8, handler: HandlerFn, template_path: []const u8) !void {
-        try self.router.add(module_name, method, path, handler, template_path);
+    pub fn route(self: *Server, module_name: []const u8, method: HttpMethod, path: []const u8, handler: HandlerFn) !void {
+        try self.router.add(module_name, method, path, handler);
     }
 
     pub fn use(self: *Server, middleware: MiddlewareFn) !void {
@@ -159,17 +154,15 @@ pub const Server = struct {
             handler(&req, &res, &ctx);
         }
 
-        const template = task.server.router.getTemplate(req.method, req.path);
+        const rendered = Template.renderTemplate(res.allocator, req.path, &ctx) catch |err| {
+            std.log.err("Template error: {}", .{err});
+            res.setBody("Internal Server Error") catch return;
+            res.status = .internal_server_error;
+            return;
+        };
 
-        if (template) |t| {
-            const rendered = Template.renderTemplate(res.allocator, t, &ctx) catch |err| {
-                std.log.err("Template error: {}", .{err});
-                res.setBody("Internal Server Error") catch return;
-                res.status = .internal_server_error;
-                return;
-            };
-
-            res.setBody(rendered) catch return;
+        if (rendered) |r| {
+            res.setBody(r) catch return;
             res.setHeader("Content-Type", "text/html") catch return;
         }
 

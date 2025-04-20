@@ -1,4 +1,4 @@
-#extends "profile/layout.zmx"
+#extends "profile/layout"
 
 #block title
     {{ page_title // "Dashboard" }} - Profile Section

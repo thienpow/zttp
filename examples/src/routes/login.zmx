@@ -1,4 +1,4 @@
-#extends "layout.zmx"
+#extends "layout"
 
 #block title
     {{ page_title // "Login" }} - {{ site_name // "My Site" }}

@@ -22,7 +22,6 @@ fn getQueryParam(req: *Request, key: []const u8, default_value: []const u8) []co
 }
 
 pub fn get(req: *Request, res: *Response, ctx: *Context) void {
-    log.info("Handling GET / request", .{});
     res.status = .ok;
 
     // --- Basic Page/Layout Info ---
@@ -74,15 +73,14 @@ pub fn get(req: *Request, res: *Response, ctx: *Context) void {
     setCtx(ctx, "show_details", getQueryParam(req, "show", "false"));
     setCtx(ctx, "theme", getQueryParam(req, "theme", "light"));
 
-    log.debug("Context set for GET /: logged_in={s}, username={s}, role={s}", .{
-        ctx.get("logged_in") orelse "N/A",
-        ctx.get("username") orelse "N/A",
-        ctx.get("role") orelse "N/A",
-    });
+    // log.debug("Context set for GET /: logged_in={s}, username={s}, role={s}", .{
+    //     ctx.get("logged_in") orelse "N/A",
+    //     ctx.get("username") orelse "N/A",
+    //     ctx.get("role") orelse "N/A",
+    // });
 }
 
 pub fn post(req: *Request, res: *Response, ctx: *Context) void {
-    log.info("Handling POST / request", .{});
     res.status = .ok;
 
     // --- Basic Page/Layout Info ---

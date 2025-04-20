@@ -193,7 +193,7 @@ pub fn parseCondition(allocator: std.mem.Allocator, content: []const u8) Templat
                     // This prevents parsing something like `"some string" != ""` incorrectly.
                     for (var_name) |c| {
                         if (!std.ascii.isAlphanumeric(c) and c != '_' and c != '.') {
-                            std.debug.print("Invalid variable name in non_empty condition: '{s}'\n", .{var_name});
+                            //std.debug.print("Invalid variable name in non_empty condition: '{s}'\n", .{var_name});
                             return TemplateError.InvalidSyntax;
                         }
                     }
@@ -351,7 +351,7 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
             var path = getDirectiveContent(template, pos, tag_len);
             // Validate path is a quoted string literal
             if (path.len < 2 or !((path[0] == '"' and path[path.len - 1] == '"') or (path[0] == '\'' and path[path.len - 1] == '\''))) {
-                std.debug.print("Invalid #extends path format: must be quoted string (e.g., \"base.html\"), got: '{s}'\n", .{path});
+                //std.debug.print("Invalid #extends path format: must be quoted string (e.g., \"layout\"), got: '{s}'\n", .{path});
                 return TemplateError.InvalidSyntax;
             }
             path = path[1 .. path.len - 1]; // Extract path content inside quotes
@@ -375,7 +375,7 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
                 const trimmed_name = std.mem.trim(u8, content_after_tag, " \t");
                 // If name is specified, it shouldn't contain spaces or be empty after trim
                 if (trimmed_name.len == 0 or std.mem.indexOfScalar(u8, trimmed_name, ' ') != null) {
-                    std.debug.print("Invalid optional block name after #endblock: '{s}'\n", .{content_after_tag});
+                    //std.debug.print("Invalid optional block name after #endblock: '{s}'\n", .{content_after_tag});
                     return TemplateError.InvalidSyntax;
                 }
                 // Note: We don't currently *use* the optional name, but we validate it.
@@ -445,7 +445,7 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
                     }
                     // Also check for "{{" which isn't in the `delimiters` array used for text splitting
                     if (!delimiter_found_at_pos and !std.mem.startsWith(u8, remaining, "{{")) {
-                        std.debug.print("Parser state error: Position {d} has zero text length but doesn't start with a known delimiter.\n", .{pos});
+                        //std.debug.print("Parser state error: Position {d} has zero text length but doesn't start with a known delimiter.\n", .{pos});
                         return TemplateError.InvalidSyntax; // Or a more specific internal error
                     }
                 }

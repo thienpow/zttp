@@ -1,4 +1,4 @@
-#extends "layout.zmx"
+#extends "layout"
 
 #block title
     {{ page_title // "Demo" }} - Conditionals Showcase - {{ site_name // "zttp Demos" }}

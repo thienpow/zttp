@@ -20,7 +20,6 @@ pub const Router = struct {
         is_parametrized: bool,
         param_names: [][]const u8,
         is_wildcard: bool,
-        template: ?[]const u8 = null,
     };
 
     pub fn init(allocator: std.mem.Allocator) Router {
@@ -38,15 +37,12 @@ pub const Router = struct {
                 self.allocator.free(param);
             }
             self.allocator.free(route.param_names);
-            if (route.template) |tpl| {
-                self.allocator.free(tpl);
-            }
         }
         self.routes.deinit();
         self.middlewares.deinit();
     }
 
-    pub fn add(self: *Router, module_name: []const u8, method: HttpMethod, path: []const u8, handler: HandlerFn, template_path: []const u8) !void {
+    pub fn add(self: *Router, module_name: []const u8, method: HttpMethod, path: []const u8, handler: HandlerFn) !void {
         _ = module_name;
 
         if (path.len == 0 or path[0] != '/') return error.InvalidPath;
@@ -72,18 +68,6 @@ pub const Router = struct {
 
         const path_owned = try self.allocator.dupe(u8, path);
 
-        var template: ?[]const u8 = null;
-        const file = std.fs.cwd().openFile(template_path, .{}) catch null;
-        if (file) |f| {
-            defer f.close();
-            const stat = try f.stat();
-            const buffer = try self.allocator.alloc(u8, stat.size);
-            _ = try f.readAll(buffer);
-            template = buffer;
-        } else {
-            //std.log.warn("Template file not found for module: {s}", .{template_path});
-        }
-
         try self.routes.append(.{
             .path = path_owned,
             .handler = handler,
@@ -91,7 +75,6 @@ pub const Router = struct {
             .is_parametrized = is_parametrized,
             .param_names = try param_names.toOwnedSlice(),
             .is_wildcard = is_wildcard,
-            .template = template,
         });
     }
 
@@ -210,64 +193,6 @@ pub const Router = struct {
             }
         }
         //std.log.debug("No route matched for {s} {s}", .{ @tagName(method), path });
-        return null;
-    }
-
-    pub fn getTemplate(self: *Router, method: HttpMethod, path: []const u8) ?[]const u8 {
-        for (self.routes.items) |route| {
-            if (route.method != method) continue;
-
-            // For non-parameterized routes, simple direct comparison
-            if (!route.is_parametrized and !route.is_wildcard) {
-                if (std.mem.eql(u8, route.path, path)) {
-                    return route.template;
-                }
-                continue;
-            }
-
-            // For wildcard routes
-            if (route.is_wildcard) {
-                const prefix = route.path[0 .. route.path.len - 2]; // Remove '/*'
-                if (std.mem.startsWith(u8, path, prefix)) {
-                    return route.template;
-                }
-                continue;
-            }
-
-            // For parameterized routes
-            var route_segments = std.mem.splitScalar(u8, route.path, '/');
-            var path_segments = std.mem.splitScalar(u8, path, '/');
-            var match = true;
-
-            while (route_segments.next()) |route_seg| {
-                const path_seg = path_segments.next() orelse {
-                    match = false;
-                    break;
-                };
-
-                if (route_seg.len == 0 and path_seg.len == 0) {
-                    continue;
-                }
-
-                // For parameter segments, just continue matching
-                if (route_seg.len > 0 and route_seg[0] == ':') {
-                    continue;
-                } else if (!std.mem.eql(u8, route_seg, path_seg)) {
-                    match = false;
-                    break;
-                }
-            }
-
-            // Check if path has extra segments
-            if (path_segments.next() != null) {
-                match = false;
-            }
-
-            if (match) {
-                return route.template;
-            }
-        }
-
         return null;
     }
 

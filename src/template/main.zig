@@ -1,4 +1,4 @@
-// src/template.main.zig
+// src/template/main.zig
 const std = @import("std");
 pub const cache = @import("cache.zig");
 const parser = @import("parser.zig");
@@ -7,16 +7,18 @@ const types = @import("types.zig");
 pub const Context = @import("../context.zig").Context;
 pub const TemplateError = types.TemplateError;
 
-const template_base_dir = "src/routes";
-
-pub const initTemplateCache = cache.initTemplateCache;
-pub const deinitTemplateCache = cache.deinitTemplateCache;
-
 pub fn renderTemplate(
     allocator: std.mem.Allocator,
-    template_content: []const u8,
+    path: []const u8,
     ctx: *Context,
-) ![]const u8 {
+) !?[]const u8 {
+    const template_cache = cache.accessCache(.get, path, null) catch |err| {
+        std.log.err("Failed to get template {s}: {}", .{ path, err });
+        return null;
+    };
+
+    const template_content = template_cache orelse return null;
+
     // Check if the request is from HTMX
     const is_htmx = if (ctx.get("is_htmx")) |value|
         std.mem.eql(u8, value, "true")
@@ -37,9 +39,9 @@ pub fn renderTemplate(
                     break;
                 }
             },
-            .extends => |path| {
+            .extends => |p| {
                 if (idx == 0 or first_real_token_index == null) {
-                    layout_rel_path = path;
+                    layout_rel_path = p;
                     first_real_token_index = idx;
                     break;
                 } else {
@@ -58,9 +60,6 @@ pub fn renderTemplate(
 
     // If it's an HTMX request, skip layout rendering and render only the template content
     if (is_htmx) {
-        //std.debug.print("HTMX request detected, rendering template without layout...\n", .{});
-        //std.debug.print("Template content: '{s}'\n", .{template_content});
-
         // Filter out extends and handle blocks appropriately
         var render_start_idx: usize = 0;
         const render_end_idx: usize = content_tokens.items.len;
@@ -101,54 +100,14 @@ pub fn renderTemplate(
             &output,
             null,
         );
-        return output.toOwnedSlice();
+        return try output.toOwnedSlice();
     }
 
     // Existing layout rendering logic for non-HTMX requests
     if (layout_rel_path) |layout_path_from_tag| {
-        //std.debug.print("Template extends layout: '{s}'\n", .{layout_path_from_tag});
-
-        var path_join_buf: [std.fs.max_path_bytes]u8 = undefined;
-        var path_fba = std.heap.FixedBufferAllocator.init(&path_join_buf);
-
-        const resolved_layout_path = std.fs.path.join(path_fba.allocator(), &.{
-            template_base_dir,
-            layout_path_from_tag,
-        }) catch {
-            return TemplateError.PathResolutionError;
-        };
-
-        var layout_content: []const u8 = undefined;
 
         // Check cache for layout
-        const maybe_cached = try cache.accessCache(.get, resolved_layout_path, null);
-
-        if (maybe_cached) |cached_content| {
-            layout_content = cached_content;
-            std.debug.print("Retrieved layout '{s}' from cache\n", .{resolved_layout_path});
-        } else {
-            std.debug.print("Layout '{s}' not found in cache, loading from file...\n", .{resolved_layout_path});
-            var loaded_content: []u8 = undefined;
-            loaded_content = std.fs.cwd().readFileAlloc(allocator, resolved_layout_path, std.math.maxInt(usize)) catch |e| {
-                std.debug.print("Error loading layout file '{s}': {any}\n", .{ resolved_layout_path, e });
-                if (e == error.FileNotFound or e == error.NotDir or e == error.IsDir) return TemplateError.LayoutNotFound;
-                return e;
-            };
-            defer allocator.free(loaded_content);
-
-            // Cache the loaded content
-            const cache_alloc = cache.getCacheAllocator() orelse return TemplateError.OutOfMemory;
-
-            const persistent_key = try cache_alloc.dupe(u8, resolved_layout_path);
-            errdefer cache_alloc.free(persistent_key);
-
-            const persistent_value = try cache_alloc.dupe(u8, loaded_content);
-
-            // Store in cache
-            _ = try cache.accessCache(.put, persistent_key, persistent_value);
-            layout_content = persistent_value;
-            std.debug.print("Cached layout '{s}' using cache allocator {any}\n", .{ persistent_key, cache_alloc });
-        }
+        const layout_cache = try cache.accessCache(.get, layout_path_from_tag, null);
 
         var block_content_map = std.StringHashMap([]const u8).init(allocator);
         defer {
@@ -173,7 +132,6 @@ pub fn renderTemplate(
                     if (capture_block_depth == 0) {
                         capture_block_name = name;
                         capture_block_start_idx = idx + 1;
-                        std.debug.print("Capturing block: {s}\n", .{name});
                     }
                     capture_block_depth += 1;
                 },
@@ -181,7 +139,6 @@ pub fn renderTemplate(
                     if (capture_block_depth == 0) return TemplateError.MissingEndblock;
                     capture_block_depth -= 1;
                     if (capture_block_depth == 0 and capture_block_name != null) {
-                        std.debug.print("Finished capturing block: {s}\n", .{capture_block_name.?});
                         var block_output = std.ArrayList(u8).init(allocator);
                         try renderer.renderTokens(
                             allocator,
@@ -216,14 +173,13 @@ pub fn renderTemplate(
 
         if (capture_block_depth != 0) return TemplateError.MissingEndblock;
 
-        var layout_tokens = try parser.tokenize(allocator, layout_content);
+        var layout_tokens = try parser.tokenize(allocator, layout_cache.?);
         defer layout_tokens.deinit();
 
         for (layout_tokens.items) |lt| {
             if (lt == .extends) return TemplateError.NestedExtendsNotSupported;
         }
 
-        std.debug.print("Rendering layout '{s}' with injected blocks...\n", .{resolved_layout_path});
         try renderer.renderTokens(
             allocator,
             layout_tokens.items,
@@ -234,7 +190,6 @@ pub fn renderTemplate(
             &block_content_map,
         );
     } else {
-        std.debug.print("Rendering standalone template...\n", .{});
         try renderer.renderTokens(
             allocator,
             content_tokens.items,
@@ -246,5 +201,5 @@ pub fn renderTemplate(
         );
     }
 
-    return output.toOwnedSlice();
+    return try output.toOwnedSlice();
 }

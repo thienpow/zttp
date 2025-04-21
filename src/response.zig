@@ -88,6 +88,7 @@ pub const Response = struct {
 };
 
 pub const StatusCode = enum(u16) {
+    unknown = 0,
     ok = 200,
     created = 201,
     accepted = 202,
@@ -104,6 +105,7 @@ pub const StatusCode = enum(u16) {
 
     pub fn reason(self: StatusCode) []const u8 {
         return switch (self) {
+            .unknown => "Unknown",
             .ok => "OK",
             .created => "Created",
             .accepted => "Accepted",

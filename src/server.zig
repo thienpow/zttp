@@ -154,6 +154,24 @@ pub const Server = struct {
             handler(&req, &res, &ctx);
         }
 
+        // Skip template rendering and handler if response is already set
+        if (res.body != null) {
+            res.send(task.conn.stream) catch |err| {
+                std.log.err("Failed to send response: {}", .{err});
+                result.success = false;
+                return;
+            };
+            result.success = true;
+            return;
+        }
+
+        // Proceed with handler if no middleware set the response
+        if (middlewares.len == 0) {
+            const handler = task.server.router.getHandler(req.method, req.path, &ctx) orelse notFound;
+            handler(&req, &res, &ctx);
+        }
+
+        // Try to render template only if response is not set
         const rendered = Template.renderTemplate(res.allocator, req.path, &ctx) catch |err| {
             std.log.err("Template error: {}", .{err});
             res.setBody("Internal Server Error") catch return;

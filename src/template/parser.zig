@@ -1,4 +1,3 @@
-// src/template/parser.zig
 const std = @import("std");
 const types = @import("types.zig");
 const TemplateError = types.TemplateError;
@@ -201,7 +200,6 @@ pub fn parseCondition(allocator: std.mem.Allocator, content: []const u8) Templat
                 } else {
                     // This could happen if there was whitespace like `var != "  "` which trims to `""`
                     // but isn't the intended non_empty check. Treat as regular comparison.
-                    // Fall through to the general comparison logic below.
                     // std.debug.print("Interpreting as standard not_equals: var='{s}', raw_value='{s}'\n", .{ var_name, raw_value });
                 }
             }
@@ -269,6 +267,32 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
             path = path[1 .. path.len - 1]; // Extract content inside quotes
             if (path.len == 0) return TemplateError.InvalidSyntax;
             try tokens.append(.{ .include = try allocator.dupe(u8, path) });
+            pos = findEndOfDirective(template, pos + tag_len);
+        } else if (std.mem.startsWith(u8, remaining, "#css ")) {
+            first_tag_found = true;
+            const tag_len = 5; // Length of "#css "
+            var path = getDirectiveContent(template, pos, tag_len);
+            // Validate path is a quoted string
+            if (path.len < 2 or !((path[0] == '"' and path[path.len - 1] == '"') or (path[0] == '\'' and path[path.len - 1] == '\''))) {
+                std.debug.print("Invalid #css path: must be quoted (e.g., \"/static/components/button.css\"), got: '{s}'\n", .{path});
+                return TemplateError.InvalidSyntax;
+            }
+            path = path[1 .. path.len - 1]; // Extract content inside quotes
+            if (path.len == 0) return TemplateError.InvalidSyntax;
+            try tokens.append(.{ .css = try allocator.dupe(u8, path) });
+            pos = findEndOfDirective(template, pos + tag_len);
+        } else if (std.mem.startsWith(u8, remaining, "#js ")) {
+            first_tag_found = true;
+            const tag_len = 4; // Length of "#js "
+            var path = getDirectiveContent(template, pos, tag_len);
+            // Validate path is a quoted string
+            if (path.len < 2 or !((path[0] == '"' and path[path.len - 1] == '"') or (path[0] == '\'' and path[path.len - 1] == '\''))) {
+                std.debug.print("Invalid #js path: must be quoted (e.g., \"/static/components/button.js\"), got: '{s}'\n", .{path});
+                return TemplateError.InvalidSyntax;
+            }
+            path = path[1 .. path.len - 1]; // Extract content inside quotes
+            if (path.len == 0) return TemplateError.InvalidSyntax;
+            try tokens.append(.{ .js = try allocator.dupe(u8, path) });
             pos = findEndOfDirective(template, pos + tag_len);
         } else if (std.mem.startsWith(u8, remaining, "#if ")) {
             first_tag_found = true;
@@ -403,9 +427,9 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
 
             // Define all possible delimiters that could end a text block
             const delimiters = [_][]const u8{
-                "{{",      "#include ", "#if ",    "#elseif ",  "#else", "#endif",
-                "#for ",   "#endfor",   "#while ", "#endwhile", "#set ", "#extends ",
-                "#block ", "#endblock",
+                "{{",    "#include ", "#css ",   "#js ",      "#if ",    "#elseif ",
+                "#else", "#endif",    "#for ",   "#endfor",   "#while ", "#endwhile",
+                "#set ", "#extends ", "#block ", "#endblock",
             };
 
             var next_delimiter_pos: usize = remaining.len; // Assume text goes to the end initially
@@ -464,7 +488,6 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
                 }
                 // If a delimiter was found (or we're at the end), the loop continues/terminates correctly.
                 // No increment to `pos` here; the tag handlers above will advance it.
-                // If pos is already >= template.len, the while loop condition handles termination.
                 if (pos >= template.len) break; // Explicitly break if at end
             }
         }

@@ -19,6 +19,7 @@ pub const TemplateError = error{
     PathResolutionError,
     ParseIntError,
     CircularInclude,
+    NoContentBlock,
 };
 
 pub const CacheError = error{
@@ -69,4 +70,6 @@ pub const Token = union(enum) {
     extends: []const u8,
     block_start: []const u8,
     endblock_stmt,
+    css: []const u8,
+    js: []const u8,
 };

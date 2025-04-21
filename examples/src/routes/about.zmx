@@ -4,10 +4,6 @@
     {{ page_title // "About" }} - {{ site_name // "My Site" }}
 #endblock
 
-#block head_extra
-<link rel="stylesheet" href="/static/css/button.css">
-#endblock
-
 #block content
     <h2>About Us</h2>
     <p>This is the about page for {{ site_name // "our website" }}.</p>
@@ -15,5 +11,7 @@
     <p>This page uses the default layout.</p>
 
 
+    #include "components/button"
+    <p>another button</p>
     #include "components/button"
 #endblock

@@ -1,1 +1,2 @@
+#css "/static/css/button.css"
 <button class="button">this button is included using '&#35;include components&#47;button'</button>

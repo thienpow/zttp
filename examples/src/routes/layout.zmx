@@ -4,11 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
-    <title>
-        #block title
-            {{ page_title // "Untitled Page" }} - {{ site_name // "My Site" }}
-        #endblock
-    </title>
 
     <style>
         body { font-family: sans-serif; margin: 20px; line-height: 1.6; }
@@ -24,20 +19,22 @@
         .flash-success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
         .flash-error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
     </style>
+    <script>
+      htmx.config.scrollIntoViewOnBoost = false;
+    </script>
     <script src="/static/components/global.js"></script>
-    #block head_extra
-        <!-- Child templates can add extra CSS links, meta tags here -->
-    #endblock
+
 </head>
 <body>
 
     <header>
-        <h1>{{ site_name // "My Awesome Site" }}</h1>
+        <h1>{{ site_name // "ZTTP Showcase" }}</h1>
         <nav>
              <ul>
                 <li><a href="/" hx-target="main" hx-boost="true">Home</a></li>
                 <li><a href="/about" hx-target="main" hx-boost="true">About</a></li>
                 <li><a href="/demo/conditionals" hx-target="main" hx-boost="true">Conditionals</a></li>
+                <li><a href="/demo/components" hx-target="main" hx-boost="true">Components</a></li>
                 <li><a href="/users/123" hx-target="main" hx-boost="true">User Example (ID 123)</a></li>
                 <li><a href="/api/json" hx-target="main" hx-boost="true">JSON API</a></li>
                 #if logged_in == "true" // Compare string value set in context
@@ -65,7 +62,7 @@
     </main>
 
     <footer>
-        <p>&copy; 2024 {{ site_name // "My Awesome Site" }}. All rights reserved.</p>
+        <p>&copy; 2025 {{ site_name // "ZTTP Showcase" }}. All rights reserved.</p>
         #block footer_extra
             <!-- Optional extra footer content -->
         #endblock

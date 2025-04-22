@@ -1,13 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>
-        #block title
-            Profile Section - {{ site_name // "My Site" }}
-        #endblock
-    </title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background-color: #e9ecef; }
         .profile-container { display: flex; min-height: 100vh; }
@@ -20,9 +16,6 @@
         .profile-header { border-bottom: 1px solid #dee2e6; padding-bottom: 15px; margin-bottom: 20px; }
         .profile-footer { margin-top: 30px; padding-top: 15px; border-top: 1px solid #dee2e6; font-size: 0.85em; color: #6c757d; text-align: center; }
     </style>
-     #block head_extra
-        <!-- Extra head elements for profile pages -->
-    #endblock
 </head>
 <body>
     <div class="profile-container">

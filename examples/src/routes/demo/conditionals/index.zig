@@ -8,19 +8,12 @@ const Context = zttp.Context;
 const log = std.log.scoped(.conditional_handler); // Scoped logger
 
 pub fn get(_: *Request, res: *Response, ctx: *Context) void {
-    log.info("Executing GET handler for /demo/conditionals", .{});
     res.status = .ok;
 
     // --- Set up common layout variables (assuming layout.zmx needs these) ---
-    log.debug("Setting common context vars...", .{});
-    ctx.set("site_name", "zttp Demos") catch |e| log.err("Failed to set site_name: {any}", .{e});
-    ctx.set("page_title", "Conditional Logic Demo") catch |e| log.err("Failed to set page_title: {any}", .{e});
     // Add logged_in and username for layout nav consistency
     ctx.set("logged_in", "true") catch |e| log.err("Failed to set logged_in: {any}", .{e}); // Simulate logged in
     ctx.set("username", "DemoUser") catch |e| log.err("Failed to set username: {any}", .{e}); // Simulate username
-
-    // --- Set up variables specifically for the conditional examples ---
-    log.debug("Setting demo-specific context vars...", .{});
 
     // --- Existing Examples ---
     // Example 1: Simple Truthiness & Else
@@ -39,16 +32,12 @@ pub fn get(_: *Request, res: *Response, ctx: *Context) void {
 
     // Example 5: Non-Empty Check
     ctx.set("messages", "You have 1 unread notification.") catch |e| log.err("Failed to set messages: {any}", .{e});
-    // ctx.set("messages", "") catch |e| log.err("Failed to set messages: {any}", .{e}); // To test the #else
 
     // --- New Enhanced Examples ---
 
     // Example 6: Variable vs. Variable Comparison
     ctx.set("user_role", "editor") catch |e| log.err("Failed to set user_role: {any}", .{e});
     ctx.set("required_role", "admin") catch |e| log.err("Failed to set required_role: {any}", .{e});
-    // To test the #if branch:
-    // ctx.set("user_role", "admin") catch |e| log.err("Failed to set user_role: {any}", .{e});
-    // ctx.set("required_role", "admin") catch |e| log.err("Failed to set required_role: {any}", .{e});
 
     // Example 7: Greater Than or Equal / Less Than or Equal
     ctx.set("score", "85") catch |e| log.err("Failed to set score: {any}", .{e});
@@ -65,5 +54,4 @@ pub fn get(_: *Request, res: *Response, ctx: *Context) void {
     // To test the #else branch:
     // ctx.set("user_preference", "light") catch |e| log.err("Failed to set user_preference: {any}", .{e});
 
-    log.info("Finished setting context for /demo/conditionals. Template rendering should follow.", .{});
 }

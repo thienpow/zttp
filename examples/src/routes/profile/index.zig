@@ -30,7 +30,6 @@ pub fn get(_: *Request, res: *Response, ctx: *Context) void {
     res.status = .ok;
     // Set context for the profile page and its specific layout
     ctx.set("profile_user", username) catch return;
-    ctx.set("page_title", "User Profile") catch return;
     ctx.set("user_email", "admin@example.com") catch return; // Example profile data
     // Template rendering (profile/index.zmx using profile/layout.zmx) is handled by the server
 }

@@ -1,15 +1,7 @@
 #extends "layout"
 
-#block title
-    {{ page_title // "Home" }} - {{ site_name // "My Site" }}
-#endblock
-
-#block head_extra
-    <meta name="description" content="Welcome to the zttp demo site homepage!">
-    <!-- Add any home-specific CSS/JS links here -->
-#endblock
-
 #block content
+    <title>ZTTP Showcase - Home</title>
     <h2>{{ page_heading // "Welcome!" }}</h2>
 
     #if post_message

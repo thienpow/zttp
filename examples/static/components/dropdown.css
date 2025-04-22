@@ -1,0 +1,21 @@
+.dropdown-menu {
+    display: none;
+    position: absolute;
+    background: #fff;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    min-width: 120px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+.dropdown-menu.open {
+    display: block;
+}
+.dropdown-menu a {
+    display: block;
+    padding: 8px 12px;
+    text-decoration: none;
+    color: #1a1a1a;
+}
+.dropdown-menu a:hover {
+    background: #f3f4f6;
+}

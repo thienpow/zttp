@@ -1,0 +1,22 @@
+.tooltip-trigger {
+    position: relative;
+    display: inline-block;
+}
+.tooltip {
+    position: absolute;
+    background: #1a1a1a;
+    color: #fff;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    white-space: nowrap;
+    opacity: 0;
+    visibility: hidden;
+    transition:
+        opacity 0.2s ease,
+        visibility 0.2s ease;
+}
+.tooltip.visible {
+    opacity: 1;
+    visibility: visible;
+}

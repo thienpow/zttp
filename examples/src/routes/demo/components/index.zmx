@@ -1,0 +1,153 @@
+#extends "layout"
+
+#block content
+
+    <title>ZTTP Showcase - Components</title>
+    #include "components/accordion"
+    #include "components/button"
+    #include "components/dropdown"
+    #include "components/modal"
+    #include "components/tab"
+    #include "components/tooltip"
+
+    <h1>Component Showcase</h1>
+    <p>Demonstrating various UI components available in this example project.</p>
+    <p><em>Note: Component JavaScript logic is primarily handled by <code>/static/components/global.js</code> which delegates to functions defined in individual component JS files using the <code>#js</code> directives above.</em></p>
+
+    <!-- Buttons -->
+    <div class="component-example">
+        <h3>Buttons</h3>
+        <div class="button-variants">
+            <button class="btn" data-variant="default" data-size="sm">Default SM</button>
+            <button class="btn" data-variant="default" data-size="default">Default</button>
+            <button class="btn" data-variant="default" data-size="lg">Default LG</button>
+            <button class="btn" data-variant="destructive" data-size="default">Destructive</button>
+            <button class="btn" data-variant="outline" data-size="default">Outline</button>
+            <button class="btn" data-variant="default" data-size="icon">
+                 <svg class="icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>
+            </button>
+            <button class="btn" data-variant="default" data-size="default" disabled>Disabled</button>
+        </div>
+         <p><em>Click buttons to see ripple effect (if enabled in JS).</em></p>
+         <pre><code>&lt;button class="btn" data-variant="default" data-size="default"&gt;Default&lt;/button&gt;
+&lt;button class="btn" data-variant="destructive" data-size="sm"&gt;Destructive SM&lt;/button&gt;
+&lt;button class="btn" data-variant="outline" data-size="lg"&gt;Outline LG&lt;/button&gt;
+&lt;button class="btn" data-variant="default" data-size="icon"&gt; (icon svg) &lt;/button&gt;</code></pre>
+    </div>
+
+    <!-- Accordion -->
+    <div class="component-example">
+        <h3>Accordion</h3>
+        <div class="accordion-group">
+            <div class="accordion">
+                <div class="accordion-header">Accordion Item 1</div>
+                <div class="accordion-content">Content for item 1. Lorem ipsum dolor sit amet.</div>
+            </div>
+            <div class="accordion open"> <!-- Initially open -->
+                <div class="accordion-header">Accordion Item 2 (Open)</div>
+                <div class="accordion-content">Content for item 2. Consectetur adipiscing elit.</div>
+            </div>
+            <div class="accordion">
+                <div class="accordion-header">Accordion Item 3</div>
+                <div class="accordion-content">Content for item 3. Sed do eiusmod tempor incididunt.</div>
+            </div>
+        </div>
+        <pre><code>&lt;div class="accordion-group"&gt;
+  &lt;div class="accordion"&gt;
+    &lt;div class="accordion-header"&gt;Header 1&lt;/div&gt;
+    &lt;div class="accordion-content"&gt;Content 1&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class="accordion open"&gt; &lt;!-- Add 'open' class --&gt;
+    &lt;div class="accordion-header"&gt;Header 2&lt;/div&gt;
+    &lt;div class="accordion-content"&gt;Content 2&lt;/div&gt;
+  &lt;/div&gt;
+&lt;/div&gt;</code></pre>
+    </div>
+
+    <!-- Dropdown -->
+    <div class="component-example">
+        <h3>Dropdown</h3>
+        <div class="dropdown-container">
+            <button class="btn dropdown-toggle" data-variant="outline">Dropdown Menu</button>
+            <div class="dropdown-menu">
+                <a href="#action1">Action 1</a>
+                <a href="#action2">Another Action</a>
+                <hr>
+                <a href="#action3">Separated Link</a>
+            </div>
+        </div>
+        <pre><code>&lt;div style="position: relative; display: inline-block;"&gt; &lt;!-- Container needed --&gt;
+  &lt;button class="btn dropdown-toggle" data-variant="outline"&gt;Menu&lt;/button&gt;
+  &lt;div class="dropdown-menu"&gt;
+    &lt;a href="#"&gt;Item 1&lt;/a&gt;
+    &lt;a href="#"&gt;Item 2&lt;/a&gt;
+  &lt;/div&gt;
+&lt;/div&gt;</code></pre>
+    </div>
+
+    <!-- Modal -->
+    <div class="component-example">
+        <h3>Modal</h3>
+        <button class="btn modal-trigger" data-variant="default" data-modal="demoModal">Open Modal</button>
+
+        <!-- Modal Structure (hidden by default) -->
+        <div class="modal" id="demoModal">
+            <div class="modal-content">
+                <h4>Modal Title</h4>
+                <p>This is the content of the modal. Press Esc or click outside to close.</p>
+                <button class="btn modal-trigger" data-variant="outline" data-modal="demoModal" style="float: right;">Close (via trigger)</button> <!-- Example close button -->
+            </div>
+        </div>
+        <pre><code>&lt;!-- Trigger --&gt;
+&lt;button class="btn modal-trigger" data-modal="myModalId"&gt;Open&lt;/button&gt;
+
+&lt;!-- Modal --&gt;
+&lt;div class="modal" id="myModalId"&gt;
+  &lt;div class="modal-content"&gt;
+    Modal Content...
+  &lt;/div&gt;
+&lt;/div&gt;</code></pre>
+    </div>
+
+    <!-- Tabs -->
+    <div class="component-example">
+        <h3>Tabs</h3>
+        <div class="tab-group">
+            <div class="tab-list">
+                <div class="tab-item active" data-tab="tab1">Tab One</div>
+                <div class="tab-item" data-tab="tab2">Tab Two</div>
+                <div class="tab-item" data-tab="tab3">Tab Three</div>
+            </div>
+            <div class="tab-content active" data-tab="tab1">
+                Content for Tab One. Initially visible.
+            </div>
+            <div class="tab-content" data-tab="tab2">
+                Content for Tab Two.
+            </div>
+            <div class="tab-content" data-tab="tab3">
+                Content for Tab Three. Lorem ipsum.
+            </div>
+        </div>
+        <pre><code>&lt;div class="tab-group"&gt;
+  &lt;div class="tab-list"&gt;
+    &lt;div class="tab-item active" data-tab="t1"&gt;Tab 1&lt;/div&gt; &lt;!-- Active tab --&gt;
+    &lt;div class="tab-item" data-tab="t2"&gt;Tab 2&lt;/div&gt;
+  &lt;/div&gt;
+  &lt;div class="tab-content active" data-tab="t1"&gt;Content 1&lt;/div&gt; &lt;!-- Active content --&gt;
+  &lt;div class="tab-content" data-tab="t2"&gt;Content 2&lt;/div&gt;
+&lt;/div&gt;</code></pre>
+    </div>
+
+    <!-- Tooltip -->
+    <div class="component-example">
+        <h3>Tooltip</h3>
+        <p>Hover over the <strong class="tooltip-trigger" data-tooltip="This is a tooltip!">trigger word</strong> to see the tooltip.</p>
+         <button class="btn tooltip-trigger" data-variant="outline" data-tooltip="Tooltip on a button">Button with Tooltip</button>
+        <pre><code>&lt;span class="tooltip-trigger" data-tooltip="Your text here"&gt;Hover Me&lt;/span&gt;</code></pre>
+    </div>
+
+#endblock
+
+#block footer_extra
+    <p>Component showcase footer additions.</p>
+#endblock

@@ -149,9 +149,6 @@ pub const Server = struct {
                 return;
             };
             callNext(&req, &res, &ctx);
-        } else {
-            const handler = task.server.router.getHandler(req.method, req.path, &ctx) orelse notFound;
-            handler(&req, &res, &ctx);
         }
 
         // Skip template rendering and handler if response is already set

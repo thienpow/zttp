@@ -1,10 +1,8 @@
 #extends "layout"
 
-#block title
-    {{ page_title // "Demo" }} - Conditionals Showcase - {{ site_name // "zttp Demos" }}
-#endblock
-
 #block content
+
+    <title>ZTTP Showcase - Conditionals</title>
     <h1>Conditional Logic Examples</h1>
     <p>Testing various conditional structures supported by the template engine.</p>
     <hr>

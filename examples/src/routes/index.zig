@@ -26,9 +26,10 @@ pub fn get(req: *Request, res: *Response, ctx: *Context) void {
     res.status = .ok;
 
     // --- Basic Page/Layout Info ---
-    setCtx(ctx, "site_name", "zttp Demo Site");
-    setCtx(ctx, "page_title", "Welcome Home");
-    setCtx(ctx, "page_heading", "zttp Framework Demo");
+    // setting these would overwrite the value defined in zmx
+    // setCtx(ctx, "site_name", "zttp Demo Site");
+    // setCtx(ctx, "page_title", "Welcome Home");
+    // setCtx(ctx, "page_heading", "zttp Framework Demo");
 
     // --- Authentication Simulation (via query param for demo) ---
     const is_logged_in = std.mem.eql(u8, getQueryParam(req, "logged_in", "false"), "true");
@@ -83,11 +84,6 @@ pub fn get(req: *Request, res: *Response, ctx: *Context) void {
 
 pub fn post(req: *Request, res: *Response, ctx: *Context) void {
     res.status = .ok;
-
-    // --- Basic Page/Layout Info ---
-    setCtx(ctx, "site_name", "zttp Demo Site");
-    setCtx(ctx, "page_title", "POST Received");
-    setCtx(ctx, "page_heading", "Form Submission");
 
     // --- Process Form Data ---
     var username: []const u8 = "Guest";

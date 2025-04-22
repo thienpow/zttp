@@ -53,14 +53,14 @@ pub fn getRoutes(allocator: std.mem.Allocator) ![]const Route {
     try routes.append(Route{
         .module_name = try allocator.dupe(u8, "index"),
         .method = .get,
-        .path = try allocator.dupe(u8, "/demo/css"),
-        .handler = @import("routes/demo/css/index.zig").get,
+        .path = try allocator.dupe(u8, "/demo/conditionals"),
+        .handler = @import("routes/demo/conditionals/index.zig").get,
     });
     try routes.append(Route{
         .module_name = try allocator.dupe(u8, "index"),
         .method = .get,
-        .path = try allocator.dupe(u8, "/demo/conditionals"),
-        .handler = @import("routes/demo/conditionals/index.zig").get,
+        .path = try allocator.dupe(u8, "/demo/components"),
+        .handler = @import("routes/demo/components/index.zig").get,
     });
     try routes.append(Route{
         .module_name = try allocator.dupe(u8, "index"),
@@ -116,16 +116,36 @@ pub fn getTemplates(allocator: std.mem.Allocator) ![]const Template {
         .buffer = @embedFile("routes/about.zmx"),
     });
     try templates.append(Template{
+        .name = try allocator.dupe(u8, "components/tooltip"),
+        .buffer = @embedFile("routes/components/tooltip.zmx"),
+    });
+    try templates.append(Template{
+        .name = try allocator.dupe(u8, "components/modal"),
+        .buffer = @embedFile("routes/components/modal.zmx"),
+    });
+    try templates.append(Template{
+        .name = try allocator.dupe(u8, "components/accordion"),
+        .buffer = @embedFile("routes/components/accordion.zmx"),
+    });
+    try templates.append(Template{
         .name = try allocator.dupe(u8, "components/button"),
         .buffer = @embedFile("routes/components/button.zmx"),
     });
     try templates.append(Template{
-        .name = try allocator.dupe(u8, "demo/css/index"),
-        .buffer = @embedFile("routes/demo/css/index.zmx"),
+        .name = try allocator.dupe(u8, "components/tab"),
+        .buffer = @embedFile("routes/components/tab.zmx"),
+    });
+    try templates.append(Template{
+        .name = try allocator.dupe(u8, "components/dropdown"),
+        .buffer = @embedFile("routes/components/dropdown.zmx"),
     });
     try templates.append(Template{
         .name = try allocator.dupe(u8, "demo/conditionals/index"),
         .buffer = @embedFile("routes/demo/conditionals/index.zmx"),
+    });
+    try templates.append(Template{
+        .name = try allocator.dupe(u8, "demo/components/index"),
+        .buffer = @embedFile("routes/demo/components/index.zmx"),
     });
     try templates.append(Template{
         .name = try allocator.dupe(u8, "profile/layout"),

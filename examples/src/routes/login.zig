@@ -8,8 +8,6 @@ const Context = zttp.Context;
 // Handler to display the login form
 pub fn get(_: *Request, res: *Response, ctx: *Context) void {
     res.status = .ok;
-    ctx.set("site_name", "My Awesome Site") catch return;
-    ctx.set("page_title", "Login") catch return;
     ctx.set("logged_in", "false") catch return; // Not logged in when viewing form
     // Render routes/login.zmx (implicitly via route definition)
 }
@@ -32,8 +30,6 @@ pub fn post(req: *Request, res: *Response, ctx: *Context) void {
         std.log.warn("Login POST received without parsable form data.", .{});
         // Re-render login form with a generic error
         res.status = .bad_request;
-        ctx.set("site_name", "My Awesome Site") catch {};
-        ctx.set("page_title", "Login") catch {};
         ctx.set("logged_in", "false") catch {};
         ctx.set("error_message", "Could not read form data.") catch {};
         // No setTemplatePath - let router render the default login.zmx
@@ -72,8 +68,8 @@ pub fn post(req: *Request, res: *Response, ctx: *Context) void {
     // --- Login Failure ---
     std.log.warn("Simulated login failed for user: {?s}", .{username});
     res.status = .unauthorized;
-    ctx.set("site_name", "My Awesome Site") catch {};
-    ctx.set("page_title", "Login") catch {};
+    // ctx.set("site_name", "My Awesome Site") catch {};
+    // ctx.set("page_title", "Login") catch {};
     ctx.set("logged_in", "false") catch {};
     ctx.set("error_message", "Invalid username or password.") catch {}; // Error message for login form
     ctx.set("submitted_username", username orelse "") catch {}; // Re-fill username field

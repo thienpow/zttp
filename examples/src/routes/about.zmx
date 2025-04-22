@@ -1,19 +1,14 @@
 #extends "layout"
 
-#block title
-    {{ page_title // "About" }} - {{ site_name // "My Site" }}
-#endblock
-
 #block content
+    <title>ZTTP Showcase - About</title>
     <h2>About Us</h2>
-    <p>This is the about page for {{ site_name // "our website" }}.</p>
+    <p>This is the about page for {{ site_name // "About" }}.</p>
     <p>We are demonstrating the features of the zttp web framework for Zig.</p>
     <p>This page uses the default layout.</p>
-
 
     #include "components/button"
     <button class="btn" data-variant="destructive" data-size="sm" onclick="alert('ABC');">Destructive Small</button>
     <p>another button</p>
-    #include "components/button"
     <button class="btn" data-variant="default" data-size="default" onclick="alert('XYZ');">Default Button</button>
 #endblock

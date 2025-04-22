@@ -12,6 +12,8 @@
 
 
     #include "components/button"
+    <button class="btn" data-variant="destructive" data-size="sm" onclick="alert('ABC');">Destructive Small</button>
     <p>another button</p>
     #include "components/button"
+    <button class="btn" data-variant="default" data-size="default" onclick="alert('XYZ');">Default Button</button>
 #endblock

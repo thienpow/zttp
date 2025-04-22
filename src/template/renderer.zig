@@ -1,3 +1,4 @@
+// src/template/renderer.zig
 const std = @import("std");
 const types = @import("types.zig");
 const cache = @import("cache.zig");
@@ -156,11 +157,9 @@ fn collectAssetPaths(
         const current_token = tokens[i];
         switch (current_token) {
             .css => |path| {
-                //std.log.debug("Collecting CSS path: {s}", .{path});
                 try css_paths.put(path, {});
             },
             .js => |path| {
-                //std.log.debug("Collecting JS path: {s}", .{path});
                 try js_paths.put(path, {});
             },
             .include => |path| {
@@ -211,7 +210,6 @@ pub fn renderTokens(
     var visited_includes = std.StringHashMap(void).init(allocator);
     defer visited_includes.deinit();
 
-    //std.log.debug("Collecting assets for tokens {d} to {d}, depth {d}", .{ start_index, end_index, depth });
     try collectAssetPaths(
         allocator,
         tokens,
@@ -223,21 +221,11 @@ pub fn renderTokens(
     );
 
     if (depth == 0) {
-        //std.log.debug("Rendering CSS/JS tags at depth 0", .{});
         var css_it = css_paths.keyIterator();
         while (css_it.next()) |path| {
             const css_tag = try std.fmt.allocPrint(allocator, "<link rel=\"stylesheet\" href=\"{s}\">\n", .{path.*});
             defer allocator.free(css_tag);
-            //std.log.debug("Rendering CSS tag: {s}", .{css_tag});
             try output.appendSlice(css_tag);
-        }
-
-        var js_it = js_paths.keyIterator();
-        while (js_it.next()) |path| {
-            const js_tag = try std.fmt.allocPrint(allocator, "<script src=\"{s}\"></script>\n", .{path.*});
-            defer allocator.free(js_tag);
-            //std.log.debug("Rendering JS tag: {s}", .{js_tag});
-            try output.appendSlice(js_tag);
         }
     }
 
@@ -291,7 +279,6 @@ pub fn renderTokens(
         switch (current_token) {
             .text => |text| {
                 if (text.len > 0) {
-                    //std.log.debug("Rendering text: {s}", .{text});
                     try output.appendSlice(text);
                 }
             },
@@ -310,7 +297,6 @@ pub fn renderTokens(
                 } else {
                     value_to_render = ctx.get(var_name_expr) orelse "";
                 }
-                //std.log.debug("Rendering variable: {s} = {s}", .{ var_name_expr, value_to_render });
                 try output.appendSlice(value_to_render);
             },
             .if_start => |condition| {
@@ -693,7 +679,6 @@ pub fn renderTokens(
                 return TemplateError.InvalidSyntax;
             },
             .include => |path| {
-                //std.log.debug("Including template: {s}, depth {d}", .{ path, depth + 1 });
                 const token_list_ptr = try cache.getTokens(path) orelse {
                     std.log.err("Template not found in cache: '{s}'", .{path});
                     return TemplateError.FileNotFound;
@@ -711,14 +696,21 @@ pub fn renderTokens(
             },
             .css => |path| {
                 _ = path;
-                //std.log.debug("Skipping CSS token: {s} at depth {d}", .{ path, depth });
                 continue;
             },
             .js => |path| {
                 _ = path;
-                //std.log.debug("Skipping JS token: {s} at depth {d}", .{ path, depth });
                 continue;
             },
+        }
+    }
+
+    if (depth == 0) {
+        var js_it = js_paths.keyIterator();
+        while (js_it.next()) |path| {
+            const js_tag = try std.fmt.allocPrint(allocator, "<script src=\"{s}\"></script>\n", .{path.*});
+            defer allocator.free(js_tag);
+            try output.appendSlice(js_tag);
         }
     }
 

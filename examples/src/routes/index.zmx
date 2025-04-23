@@ -28,7 +28,7 @@
         #endif
 
     #else
-        <p>Welcome, Guest! Please <a href="/login" hx-target="main" hx-boost="true">log in</a> or visit with <a href="/?logged_in=true">?logged_in=true</a> to see more.</p>
+        <p>Welcome, Guest! Please <a href="/login" hx-target="main" hx-boost="true">log in</a> or visit with <a href="/?logged_in=true" hx-target="main" hx-boost="true">?logged_in=true</a> to see more.</p>
         <hr>
          <p>Or submit this simple form via POST:</p>
         <form action="/" method="post">

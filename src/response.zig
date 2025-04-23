@@ -1,83 +1,115 @@
-// src/response.zig
 const std = @import("std");
+const Request = @import("request.zig").Request;
+const cookie = @import("cookie.zig");
 
+/// Errors related to response construction and sending.
+const ResponseError = error{
+    InvalidHeaderName,
+    StreamWriteError,
+    AllocationFailed,
+    InvalidStatusCode,
+} || std.fmt.AllocPrintError || std.json.ParseFromValueError || cookie.CookieError;
+
+/// Represents an HTTP response with status, headers, and body.
 pub const Response = struct {
-    allocator: std.mem.Allocator,
+    /// Arena allocator used for all dynamic memory in the response.
+    arena: std.heap.ArenaAllocator,
+    /// HTTP status code (e.g., 200 OK).
     status: StatusCode,
+    /// HTTP headers as key-value pairs.
     headers: std.StringHashMap([]const u8),
+    /// Response body, if present.
     body: ?[]const u8,
 
-    pub fn init(allocator: std.mem.Allocator) Response {
+    /// Initializes a new response with default values.
+    pub fn init(parent_allocator: std.mem.Allocator) Response {
+        var arena = std.heap.ArenaAllocator.init(parent_allocator);
+        const allocator = arena.allocator();
         return .{
-            .allocator = allocator,
+            .arena = arena,
             .status = .ok,
             .headers = std.StringHashMap([]const u8).init(allocator),
             .body = null,
         };
     }
 
+    /// Frees all memory associated with the response.
     pub fn deinit(self: *Response) void {
-        var it = self.headers.iterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
-        }
-        self.headers.deinit();
-        if (self.body) |b| self.allocator.free(b);
+        self.arena.deinit();
     }
 
+    /// Sets a header with the given name and value.
+    /// Overwrites existing header if it exists.
     pub fn setHeader(self: *Response, name: []const u8, value: []const u8) !void {
-        if (self.headers.get(name)) |old| self.allocator.free(old);
+        try validateHeaderName(name);
+        const allocator = self.arena.allocator();
+        if (self.headers.get(name)) |old| self.arena.allocator().free(old);
         try self.headers.put(
-            try self.allocator.dupe(u8, name),
-            try self.allocator.dupe(u8, value),
+            try allocator.dupe(u8, name),
+            try allocator.dupe(u8, value),
         );
     }
 
+    /// Sets the response body.
+    /// Overwrites existing body if it exists.
     pub fn setBody(self: *Response, body: []const u8) !void {
-        if (self.body) |b| self.allocator.free(b);
-        self.body = try self.allocator.dupe(u8, body);
+        const allocator = self.arena.allocator();
+        if (self.body) |b| allocator.free(b);
+        self.body = try allocator.dupe(u8, body);
     }
 
+    /// Sets the response body to a JSON-serialized value.
+    /// Automatically sets Content-Type to application/json.
     pub fn setJson(self: *Response, value: anytype) !void {
-        if (self.body) |b| self.allocator.free(b);
-        var buffer = std.ArrayList(u8).init(self.allocator);
+        const allocator = self.arena.allocator();
+        if (self.body) |b| allocator.free(b);
+        var buffer = std.ArrayList(u8).init(allocator);
         defer buffer.deinit();
         try std.json.stringify(value, .{}, buffer.writer());
-        self.body = try self.allocator.dupe(u8, buffer.items);
+        self.body = try allocator.dupe(u8, buffer.items);
         try self.setHeader("Content-Type", "application/json");
     }
 
-    pub fn send(self: *Response, stream: std.net.Stream) !void {
-        var buffer = std.ArrayList(u8).init(self.allocator);
+    /// Sets a cookie in the response using a Set-Cookie header.
+    pub fn setCookie(self: *Response, name: []const u8, value: []const u8, options: CookieOptions) !void {
+        const allocator = self.arena.allocator();
+        var buffer = std.ArrayList(u8).init(allocator);
+        defer buffer.deinit();
+        try buffer.writer().print("{s}={s}", .{ name, value });
+        if (options.expires) |exp| {
+            try buffer.writer().print("; Expires={s}", .{exp});
+        }
+        if (options.path) |path| {
+            try buffer.writer().print("; Path={s}", .{path});
+        }
+        if (options.secure) {
+            try buffer.writer().writeAll("; Secure");
+        }
+        if (options.same_site) |ss| {
+            try buffer.writer().print("; SameSite={s}", .{ss});
+        }
+        const cookie_str = try allocator.dupe(u8, buffer.items);
+        try self.setHeader("Set-Cookie", cookie_str);
+    }
+
+    /// Sets a redirect response with the given status and location.
+    pub fn redirect(self: *Response, status: StatusCode, location: []const u8) !void {
+        if (@intFromEnum(status) < 300 or @intFromEnum(status) >= 400) {
+            return ResponseError.InvalidStatusCode;
+        }
+        self.status = status;
+        try self.setHeader("Location", location);
+        try self.setBody("");
+    }
+
+    /// Sends the response over the given stream.
+    /// Optionally takes a Request to set Connection header based on keep-alive.
+    pub fn send(self: *Response, stream: std.net.Stream, request: ?*const Request) !void {
+        var buffer = std.ArrayList(u8).init(self.arena.allocator());
         defer buffer.deinit();
 
-        try buffer.writer().print("HTTP/1.1 {d} {s}\r\n", .{
-            @intFromEnum(self.status),
-            self.status.reason(),
-        });
-
-        if (self.body) |body| {
-            try buffer.writer().print("Content-Length: {d}\r\n", .{body.len});
-            if (!self.headers.contains("Content-Type")) {
-                try buffer.writer().writeAll("Content-Type: text/plain; charset=utf-8\r\n");
-            }
-        } else {
-            try buffer.writer().writeAll("Content-Length: 0\r\n");
-        }
-
-        const date = try getHttpDate(self.allocator);
-        defer self.allocator.free(date);
-        try buffer.writer().print("Date: {s}\r\n", .{date});
-
-        var it = self.headers.iterator();
-        while (it.next()) |entry| {
-            try buffer.writer().print("{s}: {s}\r\n", .{
-                entry.key_ptr.*,
-                entry.value_ptr.*,
-            });
-        }
-
+        try writeStatusLine(self, buffer.writer());
+        try writeHeaders(self, buffer.writer(), request);
         try buffer.writer().writeAll("\r\n");
         if (self.body) |body| {
             try buffer.writer().writeAll(body);
@@ -87,6 +119,15 @@ pub const Response = struct {
     }
 };
 
+/// Options for setting cookies.
+pub const CookieOptions = struct {
+    expires: ?[]const u8 = null,
+    path: ?[]const u8 = null,
+    secure: bool = false,
+    same_site: ?[]const u8 = null,
+};
+
+/// HTTP status codes.
 pub const StatusCode = enum(u16) {
     unknown = 0,
     ok = 200,
@@ -102,7 +143,9 @@ pub const StatusCode = enum(u16) {
     not_found = 404,
     method_not_allowed = 405,
     internal_server_error = 500,
+    _,
 
+    /// Returns the reason phrase for the status code.
     pub fn reason(self: StatusCode) []const u8 {
         return switch (self) {
             .unknown => "Unknown",
@@ -119,10 +162,65 @@ pub const StatusCode = enum(u16) {
             .not_found => "Not Found",
             .method_not_allowed => "Method Not Allowed",
             .internal_server_error => "Internal Server Error",
+            _ => "Unknown",
         };
     }
 };
 
+/// Validates that a header name contains only printable ASCII characters.
+fn validateHeaderName(name: []const u8) !void {
+    for (name) |c| {
+        if (c < 33 or c > 126) return ResponseError.InvalidHeaderName;
+    }
+}
+
+/// Writes the status line to the buffer (e.g., "HTTP/1.1 200 OK").
+fn writeStatusLine(resp: *Response, writer: anytype) !void {
+    try writer.print("HTTP/1.1 {d} {s}\r\n", .{
+        @intFromEnum(resp.status),
+        resp.status.reason(),
+    });
+}
+
+/// Writes headers to the buffer, including default headers and Connection based on request.
+fn writeHeaders(resp: *Response, writer: anytype, request: ?*const Request) !void {
+    const allocator = resp.arena.allocator();
+
+    // Set Content-Length and default Content-Type
+    if (resp.body) |body| {
+        try writer.print("Content-Length: {d}\r\n", .{body.len});
+        if (!resp.headers.contains("Content-Type")) {
+            try writer.writeAll("Content-Type: text/plain; charset=utf-8\r\n");
+        }
+    } else {
+        try writer.writeAll("Content-Length: 0\r\n");
+    }
+
+    // Set Date header
+    const date = try getHttpDate(allocator);
+    defer allocator.free(date);
+    try writer.print("Date: {s}\r\n", .{date});
+
+    // Set Connection header based on request keep-alive
+    if (request) |req| {
+        const keep_alive = req.isKeepAlive();
+        try writer.print("Connection: {s}\r\n", .{if (keep_alive) "keep-alive" else "close"});
+    }
+
+    // Set default Server header
+    try writer.writeAll("Server: zttp/1.0\r\n");
+
+    // Write user-defined headers
+    var it = resp.headers.iterator();
+    while (it.next()) |entry| {
+        try writer.print("{s}: {s}\r\n", .{
+            entry.key_ptr.*,
+            entry.value_ptr.*,
+        });
+    }
+}
+
+/// Formats the current time as an HTTP date (e.g., "Wed, 21 Oct 2025 07:28:00 GMT").
 fn getHttpDate(allocator: std.mem.Allocator) ![]const u8 {
     const timestamp = std.time.timestamp();
     const epoch_secs = std.time.epoch.EpochSeconds{ .secs = @intCast(timestamp) };

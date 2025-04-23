@@ -1,3 +1,4 @@
+// src/context.zig
 const std = @import("std");
 
 pub const Context = struct {
@@ -12,24 +13,18 @@ pub const Context = struct {
     }
 
     pub fn deinit(self: *Context) void {
-        var it = self.data.iterator();
-        while (it.next()) |entry| {
-            self.allocator.free(entry.key_ptr.*);
-            self.allocator.free(entry.value_ptr.*);
-        }
         self.data.deinit();
+        // No individual free calls; rely on arena.deinit() if using ArenaAllocator
     }
 
     pub fn set(self: *Context, key: []const u8, value: []const u8) !void {
         const key_copy = try self.allocator.dupe(u8, key);
-        errdefer self.allocator.free(key_copy);
+        errdefer self.allocator.free(key_copy); // Safe for non-arena allocators
         const value_copy = try self.allocator.dupe(u8, value);
         errdefer self.allocator.free(value_copy);
 
-        if (self.data.fetchRemove(key)) |old_entry| {
-            self.allocator.free(old_entry.key);
-            self.allocator.free(old_entry.value);
-        }
+        // Remove old entry without freeing (arena will handle cleanup)
+        _ = self.data.remove(key);
         try self.data.put(key_copy, value_copy);
     }
 
@@ -37,10 +32,8 @@ pub const Context = struct {
         const key_copy = try self.allocator.dupe(u8, key);
         errdefer self.allocator.free(key_copy);
 
-        if (self.data.fetchRemove(key)) |old_entry| {
-            self.allocator.free(old_entry.key);
-            self.allocator.free(old_entry.value);
-        }
+        // Remove old entry without freeing
+        _ = self.data.remove(key);
         try self.data.put(key_copy, value);
     }
 
@@ -60,11 +53,6 @@ pub const Context = struct {
     }
 
     pub fn remove(self: *Context, key: []const u8) bool {
-        if (self.data.fetchRemove(key)) |removed_entry| {
-            self.allocator.free(removed_entry.key);
-            self.allocator.free(removed_entry.value);
-            return true;
-        }
-        return false;
+        return self.data.remove(key); // No free; arena handles cleanup
     }
 };

@@ -52,7 +52,7 @@ pub fn get(req: *Request, res: *Response, ctx: *Context) void {
             const decoding_successful = true; // Assuming success for demo
 
             if (decoding_successful) {
-                const dupe_result = res.allocator.dupe(u8, decoded_slice);
+                const dupe_result = res.arena.allocator().dupe(u8, decoded_slice);
                 if (dupe_result) |duped_username| {
                     username = duped_username;
                 } else |err| {
@@ -88,7 +88,7 @@ pub fn post(req: *Request, res: *Response, ctx: *Context) void {
     // --- Process Form Data ---
     var username: []const u8 = "Guest";
     var is_logged_in = false;
-    var submitted_data = std.ArrayList(u8).init(res.allocator);
+    var submitted_data = std.ArrayList(u8).init(res.arena.allocator());
     defer submitted_data.deinit();
 
     if (req.form) |form| {
@@ -108,7 +108,7 @@ pub fn post(req: *Request, res: *Response, ctx: *Context) void {
 
             if (std.mem.eql(u8, key, "username")) {
                 if (value.len > 0) {
-                    const dupe_result = res.allocator.dupe(u8, value);
+                    const dupe_result = res.arena.allocator().dupe(u8, value);
                     if (dupe_result) |duped_username| {
                         username = duped_username;
                     } else |err| {
@@ -135,7 +135,7 @@ pub fn post(req: *Request, res: *Response, ctx: *Context) void {
 
     // --- FIX: Use explicit if/else for post_message dupe ---
     var post_msg_for_ctx: []const u8 = ""; // Variable to hold the final message
-    const post_msg_dupe_result = res.allocator.dupe(u8, submitted_data.items);
+    const post_msg_dupe_result = res.arena.allocator().dupe(u8, submitted_data.items);
     if (post_msg_dupe_result) |duped_msg| {
         post_msg_for_ctx = duped_msg; // Assign success result
     } else |err| {

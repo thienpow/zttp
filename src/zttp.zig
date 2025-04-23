@@ -44,9 +44,12 @@ pub const Template = struct {
 };
 
 pub fn createServer(
-    allocator: std.mem.Allocator,
+    parent_allocator: std.mem.Allocator,
     options: ServerOptions,
 ) !*ServerBundle {
+    var arena = std.heap.ArenaAllocator.init(parent_allocator);
+    const alloc = arena.allocator();
+
     const pool_options = ThreadPool.Options{
         .min_threads = options.min_threads,
         .max_threads = options.max_threads,
@@ -54,25 +57,25 @@ pub fn createServer(
         .adaptive_scaling = options.adaptive_scaling,
     };
 
-    var pool = try allocator.create(ThreadPool);
-    pool.* = try ThreadPool.init(allocator, pool_options);
+    var pool = try alloc.create(ThreadPool);
+    pool.* = try ThreadPool.init(parent_allocator, pool_options); // Use parent_allocator
     errdefer {
         pool.deinit();
-        allocator.destroy(pool);
+        alloc.destroy(pool);
     }
 
     try pool.startWorkers(options.min_threads);
 
-    var server = try allocator.create(Server);
-    server.* = Server.init(allocator, options.port, pool);
+    var server = try alloc.create(Server);
+    server.* = Server.init(parent_allocator, options.port, pool); // Use parent_allocator
     errdefer {
         server.deinit();
-        allocator.destroy(server);
+        alloc.destroy(server);
     }
 
-    const bundle = try allocator.create(ServerBundle);
+    const bundle = try alloc.create(ServerBundle);
     bundle.* = ServerBundle{
-        .allocator = allocator,
+        .arena = arena,
         .server = server,
         .pool = pool,
         .options = options,
@@ -82,7 +85,7 @@ pub fn createServer(
 }
 
 pub const ServerBundle = struct {
-    allocator: std.mem.Allocator,
+    arena: std.heap.ArenaAllocator,
     server: *Server,
     pool: *ThreadPool,
     options: ServerOptions,
@@ -103,13 +106,11 @@ pub const ServerBundle = struct {
     pub fn deinit(self: *ServerBundle) void {
         self.server.deinit();
         self.pool.deinit();
-        self.allocator.destroy(self.server);
-        self.allocator.destroy(self.pool);
-        self.allocator.destroy(self);
+        self.arena.deinit();
     }
 
     pub fn route(self: *ServerBundle, method: HttpMethod, path: []const u8, handler: HandlerFn) !void {
-        try self.server.route(method, path, handler);
+        try self.server.route("", method, path, handler); // Empty module_name as per router.zig
     }
 
     pub fn use(self: *ServerBundle, middleware: MiddlewareFn) !void {
@@ -117,15 +118,7 @@ pub const ServerBundle = struct {
     }
 
     pub fn loadRoutes(self: *ServerBundle, comptime getRoutesFn: fn (std.mem.Allocator) anyerror![]const Route) !void {
-        const routes = try getRoutesFn(self.allocator);
-        defer {
-            for (routes) |r| {
-                self.allocator.free(r.module_name);
-                self.allocator.free(r.path);
-            }
-            self.allocator.free(routes);
-        }
-
+        const routes = try getRoutesFn(self.arena.allocator());
         if (routes.len == 0) {
             std.log.warn("No routes loaded", .{});
         }
@@ -136,14 +129,14 @@ pub const ServerBundle = struct {
     }
 
     pub fn loadTemplates(self: *ServerBundle, comptime getTemplatesFn: fn (std.mem.Allocator) anyerror![]const Template) !void {
-        const templates = try getTemplatesFn(self.allocator);
+        const templates = try getTemplatesFn(self.arena.allocator());
 
         if (templates.len == 0) {
             std.log.warn("No templates loaded", .{});
         }
 
         // Initialize the template cache with capacity for all templates
-        try cache.initTemplateCache(self.allocator, @intCast(templates.len));
+        try cache.initTemplateCache(self.arena.allocator(), @intCast(templates.len));
 
         for (templates) |t| {
             _ = try cache.putTokenizedTemplate(t.name, t.buffer);

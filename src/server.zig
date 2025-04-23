@@ -153,7 +153,7 @@ pub const Server = struct {
 
         // Skip template rendering and handler if response is already set
         if (res.body != null) {
-            res.send(task.conn.stream) catch |err| {
+            res.send(task.conn.stream, &req) catch |err| {
                 std.log.err("Failed to send response: {}", .{err});
                 result.success = false;
                 return;
@@ -169,7 +169,7 @@ pub const Server = struct {
         }
 
         // Try to render template only if response is not set
-        const rendered = Template.renderTemplate(res.allocator, req.path, &ctx) catch |err| {
+        const rendered = Template.renderTemplate(res.arena.allocator(), req.path, &ctx) catch |err| {
             std.log.err("Template error: {}", .{err});
             res.setBody("Internal Server Error") catch return;
             res.status = .internal_server_error;
@@ -181,7 +181,7 @@ pub const Server = struct {
             res.setHeader("Content-Type", "text/html") catch return;
         }
 
-        res.send(task.conn.stream) catch |err| {
+        res.send(task.conn.stream, &req) catch |err| {
             std.log.err("Failed to send response: {}", .{err});
             result.success = false;
             return;
@@ -223,7 +223,7 @@ pub const Server = struct {
         res.status = status;
         res.setBody(msg) catch return;
         res.setHeader("Content-Type", "text/plain") catch return;
-        res.send(stream) catch return;
+        res.send(stream, null) catch return;
     }
 
     fn notFound(_: *Request, res: *Response, _: *Context) void {

@@ -119,7 +119,7 @@ pub fn static(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Re
     };
 
     // Allocate memory for file content using the response's allocator (or context allocator)
-    const file_content = res.allocator.alloc(u8, file_size) catch |err| {
+    const file_content = res.arena.allocator().alloc(u8, file_size) catch |err| {
         std.log.warn("Failed to allocate memory: {}", .{err});
         res.status = @enumFromInt(500); // Internal Server Error
         res.body = "Internal Server Error";
@@ -128,7 +128,7 @@ pub fn static(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Re
 
     _ = file.readAll(file_content) catch |err| {
         std.log.warn("Failed to read file: {}", .{err});
-        res.allocator.free(file_content); // Clean up on error
+        res.arena.allocator().free(file_content); // Clean up on error
         res.status = @enumFromInt(500); // Internal Server Error
         res.body = "Internal Server Error";
         return;
@@ -137,7 +137,7 @@ pub fn static(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Re
     // Set response headers and body
     res.headers.put("Content-Type", getContentType(file_path)) catch |err| {
         std.log.warn("Failed to set Content-Type: {}", .{err});
-        res.allocator.free(file_content); // Clean up on error
+        res.arena.allocator().free(file_content); // Clean up on error
         res.status = @enumFromInt(500); // Internal Server Error
         res.body = "Internal Server Error";
         return;

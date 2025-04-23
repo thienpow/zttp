@@ -238,14 +238,49 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
     errdefer tokens.deinit();
 
     var pos: usize = 0;
-    // Tracks if any non-whitespace text or tag has been encountered.
-    // Used to ignore leading whitespace and enforce #extends placement.
     var first_tag_found = false;
 
     while (pos < template.len) {
         const remaining = template[pos..];
 
-        // Use `if/else if` chain for mutually exclusive tags starting at `pos`
+        // Check for code blocks first (```)
+        if (std.mem.startsWith(u8, remaining, "```")) {
+            first_tag_found = true;
+            const start = pos + 3; // Start after "```"
+
+            // Extract language (if any)
+            var content_start = start;
+            var language: ?[]const u8 = null;
+            if (start < template.len and template[start] != '\n') {
+                // Find end of language line
+                var lang_end = start;
+                while (lang_end < template.len and template[lang_end] != '\n') {
+                    lang_end += 1;
+                }
+                language = std.mem.trim(u8, template[start..lang_end], " \t");
+                if (language.?.len == 0) language = null;
+                content_start = lang_end + 1; // Skip newline after language
+            }
+
+            // Find closing ```
+            const closing_pos = std.mem.indexOf(u8, template[content_start..], "```") orelse {
+                std.debug.print("Invalid code block: no closing ``` found\n", .{});
+                return TemplateError.InvalidCodeBlock;
+            };
+            const content_end = content_start + closing_pos;
+            const content = template[content_start..content_end];
+
+            // Create code block token
+            try tokens.append(.{ .code_block = .{
+                .language = if (language) |lang| try allocator.dupe(u8, lang) else null,
+                .content = try allocator.dupe(u8, content),
+            } });
+
+            pos = content_end + 3; // Move past closing "```"
+            continue;
+        }
+
+        // Existing tag checks
         if (std.mem.startsWith(u8, remaining, "{{")) {
             first_tag_found = true;
             const start = pos + 2; // Start after "{{"
@@ -427,9 +462,23 @@ pub fn tokenize(allocator: std.mem.Allocator, template: []const u8) !std.ArrayLi
 
             // Define all possible delimiters that could end a text block
             const delimiters = [_][]const u8{
-                "{{",    "#include ", "#css ",   "#js ",      "#if ",    "#elseif ",
-                "#else", "#endif",    "#for ",   "#endfor",   "#while ", "#endwhile",
-                "#set ", "#extends ", "#block ", "#endblock",
+                "```", // Code block delimiter
+                "{{",
+                "#include ",
+                "#css ",
+                "#js ",
+                "#if ",
+                "#elseif ",
+                "#else",
+                "#endif",
+                "#for ",
+                "#endfor",
+                "#while ",
+                "#endwhile",
+                "#set ",
+                "#extends ",
+                "#block ",
+                "#endblock",
             };
 
             var next_delimiter_pos: usize = remaining.len; // Assume text goes to the end initially

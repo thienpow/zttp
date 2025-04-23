@@ -20,6 +20,7 @@ pub const TemplateError = error{
     ParseIntError,
     CircularInclude,
     NoContentBlock,
+    InvalidCodeBlock,
 };
 
 pub const CacheError = error{
@@ -72,4 +73,5 @@ pub const Token = union(enum) {
     endblock_stmt,
     css: []const u8,
     js: []const u8,
+    code_block: struct { language: ?[]const u8, content: []const u8 },
 };

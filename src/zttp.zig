@@ -1,16 +1,21 @@
 // src/zttp.zig
 const std = @import("std");
-pub const Server = @import("server.zig").Server;
-pub const ThreadPool = @import("pool.zig").ThreadPool;
+
+pub const Middleware = @import("middleware/mod.zig");
 pub const Request = @import("request.zig").Request;
 pub const Response = @import("response.zig").Response;
 pub const Context = @import("context.zig").Context;
-pub const MiddlewareFn = @import("router.zig").MiddlewareFn;
-pub const HandlerFn = @import("router.zig").HandlerFn;
-pub const NextFn = @import("router.zig").NextFn;
-pub const Router = @import("router.zig").Router;
-pub const cache = @import("template/main.zig").cache;
-pub const Middleware = @import("middleware/mod.zig");
+
+const Server = @import("server.zig").Server;
+const ThreadPool = @import("pool.zig").ThreadPool;
+
+const router = @import("router.zig");
+const MiddlewareFn = router.MiddlewareFn;
+const HandlerFn = router.HandlerFn;
+const NextFn = router.NextFn;
+const Router = router.Router;
+
+const cache = @import("template/cache.zig");
 
 pub const HttpMethod = enum {
     get,

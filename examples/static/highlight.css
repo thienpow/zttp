@@ -1,0 +1,146 @@
+pre {
+    background-color: #21262d;
+    border: 1px solid #30363d;
+    padding: 16px;
+    border-radius: 6px;
+    overflow-x: auto;
+    font-family: "Liberation Mono", monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #c9d1d9;
+}
+
+pre code.highlight {
+    background-color: transparent;
+    border: none;
+    padding: 0;
+    font-size: 100%;
+    color: inherit;
+    font-family: inherit;
+}
+
+.highlight .k,
+.highlight .kd,
+.highlight .kn,
+.highlight .kp,
+.highlight .kr,
+.highlight .kt {
+    color: #ff6d67; /* Bright red-orange */
+}
+
+.highlight .n,
+.highlight .ni,
+.highlight .nl,
+.highlight .nn,
+.highlight .nx,
+.highlight .py,
+.highlight .nv {
+    color: #d4d4d4; /* Light gray */
+}
+
+.highlight .o,
+.highlight .ow {
+    color: #c9d1d9; /* Default text color */
+}
+
+.highlight .p {
+    color: #c9d1d9; /* Default text color */
+}
+
+.highlight .c,
+.highlight .c1,
+.highlight .cs,
+.highlight .cm {
+    color: #6a9955; /* Muted green */
+    font-style: italic; /* Often nice for comments */
+}
+
+.highlight .s,
+.highlight .s1,
+.highlight .s2,
+.highlight .sb,
+.highlight .sc,
+.highlight .sd,
+.highlight .se,
+.highlight .sh,
+.highlight .si,
+.highlight .ss,
+.highlight .sx {
+    color: #ce9178; /* Warm peach */
+}
+
+.highlight .sr {
+    color: #c586c0; /* Purple/Magenta often used for Regex */
+}
+
+.highlight .m,
+.highlight .mf,
+.highlight .mh,
+.highlight .mi,
+.highlight .mo,
+.highlight .il {
+    color: #569cd6; /* Light blue often used for numbers/constants */
+}
+
+.highlight .nb,
+.highlight .bp,
+.highlight .nf,
+.highlight .fm {
+    color: #dcdcaa; /* Soft yellow */
+}
+
+.highlight .nc,
+.highlight .no,
+.highlight .nd,
+.highlight .ne {
+    color: #4ec9b0; /* Cyan/Teal */
+}
+
+.highlight .kc {
+    color: #569cd6; /* Light blue (same as numbers) */
+}
+
+.highlight .err {
+    color: #f44747; /* Bright red for errors */
+    background-color: #3f1515; /* Dark red background for errors */
+}
+
+.highlight .nt {
+    color: #ff6d67; /* Red-orange, makes tags stand out like keywords */
+}
+.highlight .na {
+    color: #9cdcfe; /* Lighter Blue for attributes */
+}
+.highlight .cp {
+    color: #6a9955; /* Using comment color for doctype/PI */
+    font-style: normal;
+}
+.highlight .py,
+.highlight .css .k {
+    /* Be careful with `.css .k` if keywords exist */
+    color: #9cdcfe; /* Lighter Blue for properties */
+}
+.highlight .css .kc {
+    /* More specific selector */
+    color: #ff6d67; /* Red-orange for emphasis */
+}
+.highlight .m + .kt,
+.highlight .m + .ku {
+    /* If units are tokenized separately */
+    color: #569cd6; /* Light blue (same as numbers) */
+}
+.highlight .si {
+    color: #ff6d67;
+} /* Red-orange for the ${...} part */
+.highlight .sx {
+    color: #ce9178;
+} /* Peach for the rest */
+.highlight .nx + .p + .nx {
+    /* Approximation for property access */
+    /* color: #9cdcfe; */ /* Optional: Use Lighter Blue like CSS properties */
+}
+.highlight .cp,
+.highlight .cs {
+    color: #569cd6; /* Red-orange to make delimiters stand out */
+    font-weight: bold;
+}

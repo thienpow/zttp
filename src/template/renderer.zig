@@ -1,4 +1,3 @@
-// src/template/renderer.zig
 const std = @import("std");
 const types = @import("types.zig");
 const cache = @import("cache.zig");
@@ -8,7 +7,7 @@ const TemplateError = types.TemplateError;
 const Condition = types.Condition;
 const Token = types.Token;
 const SetStmtPayload = types.SetStmtPayload;
-const ForLoopPayload = types.ForLoopPayload;
+const highlighter = @import("highlighter.zig");
 
 // Helper to check truthiness according to template logic
 fn isTruthy(ctx: *Context, key: []const u8) bool {
@@ -143,6 +142,25 @@ fn handleSetStmt(allocator: std.mem.Allocator, ctx: *Context, set: SetStmtPayloa
     }
 }
 
+// Helper function to HTML-escape content
+fn htmlEscape(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+    var escaped = std.ArrayList(u8).init(allocator);
+    defer escaped.deinit();
+
+    for (input) |c| {
+        switch (c) {
+            '<' => try escaped.appendSlice("&lt;"),
+            '>' => try escaped.appendSlice("&gt;"),
+            '&' => try escaped.appendSlice("&amp;"),
+            '"' => try escaped.appendSlice("&quot;"),
+            '\'' => try escaped.appendSlice("&#39;"),
+            else => try escaped.append(c),
+        }
+    }
+
+    return try escaped.toOwnedSlice();
+}
+
 fn collectAssetPaths(
     allocator: std.mem.Allocator,
     tokens: []const Token,
@@ -241,7 +259,6 @@ pub fn renderTokens(
                     .if_start => depth_if += 1,
                     .endif_stmt => {
                         if (depth_if > 0) depth_if -= 1 else {
-                            std.log.err("InvalidSyntax: #endif without matching #if at index {d}", .{i});
                             return TemplateError.InvalidSyntax;
                         }
                     },
@@ -702,13 +719,26 @@ pub fn renderTokens(
                 _ = path;
                 continue;
             },
+            .code_block => |block| {
+                const lang = block.language orelse "text";
+                const class_name = try std.fmt.allocPrint(allocator, "highlight language-{s}", .{lang});
+                defer allocator.free(class_name);
+
+                // Use the highlighter to tokenize and wrap code with Pygments classes
+                const highlighted_content = try highlighter.highlight(allocator, block.content, lang);
+                defer allocator.free(highlighted_content);
+
+                const html = try std.fmt.allocPrint(allocator, "<pre><code class=\"{s}\">{s}</code></pre>", .{ class_name, highlighted_content });
+                defer allocator.free(html);
+                try output.appendSlice(html);
+            },
         }
     }
 
     if (depth == 0) {
         var js_it = js_paths.keyIterator();
         while (js_it.next()) |path| {
-            const js_tag = try std.fmt.allocPrint(allocator, "<script src=\"{s}\"></script>\n", .{path.*});
+            const js_tag = try std.fmt.allocPrint(allocator, "<script src=\"{s}\" defer></script>\n", .{path.*});
             defer allocator.free(js_tag);
             try output.appendSlice(js_tag);
         }

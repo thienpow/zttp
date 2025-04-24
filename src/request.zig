@@ -20,8 +20,8 @@ const RequestError = error{
 
 /// Represents an HTTP request with parsed method, path, headers, query, cookies, and body.
 pub const Request = struct {
-    /// Arena allocator used for all dynamic memory in the request.
-    arena: std.heap.ArenaAllocator,
+    /// Allocator used for all dynamic memory in the request.
+    allocator: std.mem.Allocator,
     /// HTTP method (GET, POST, etc.).
     method: HttpMethod,
     /// Request path (e.g., "/users").
@@ -38,6 +38,8 @@ pub const Request = struct {
     body: ?[]const u8,
     /// Parsed JSON body, if applicable.
     json: ?std.json.Value,
+    /// Arena allocator for JSON, if applicable.
+    json_arena: ?*std.heap.ArenaAllocator,
     /// Parsed form data, if applicable.
     form: ?std.StringHashMap([]const u8),
     /// Parsed multipart form data, if applicable.
@@ -53,15 +55,11 @@ pub const Request = struct {
 
     /// Parses an HTTP request from raw data.
     /// Caller is responsible for calling `deinit` on the returned request.
-    pub fn parse(parent_allocator: std.mem.Allocator, data: []const u8) !Request {
+    pub fn parse(allocator: std.mem.Allocator, data: []const u8) !Request {
         if (data.len > 65536) return RequestError.RequestTooLarge;
 
-        var arena = std.heap.ArenaAllocator.init(parent_allocator);
-        errdefer arena.deinit();
-        const allocator = arena.allocator();
-
         var req = Request{
-            .arena = arena,
+            .allocator = allocator,
             .method = undefined,
             .path = "",
             .version = "",
@@ -70,6 +68,7 @@ pub const Request = struct {
             .cookies = std.StringHashMap([]const u8).init(allocator),
             .body = null,
             .json = null,
+            .json_arena = null,
             .form = null,
             .multipart = null,
         };
@@ -87,7 +86,72 @@ pub const Request = struct {
 
     /// Frees all memory associated with the request.
     pub fn deinit(self: *Request) void {
-        self.arena.deinit();
+        // Free headers
+        var header_it = self.headers.iterator();
+        while (header_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.headers.deinit();
+
+        // Free query parameters
+        var query_it = self.query.iterator();
+        while (query_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.query.deinit();
+
+        // Free cookies
+        var cookie_it = self.cookies.iterator();
+        while (cookie_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.cookies.deinit();
+
+        // Free path and version
+        if (self.path.len > 0) self.allocator.free(self.path);
+        if (self.version.len > 0) self.allocator.free(self.version);
+
+        // Free body
+        if (self.body) |body| {
+            self.allocator.free(body);
+        }
+
+        // Free JSON if present
+        if (self.json) |json| {
+            if (self.json_arena) |arena| {
+                var parsed = std.json.Parsed(std.json.Value){
+                    .arena = arena,
+                    .value = json,
+                };
+                parsed.deinit();
+            }
+        }
+
+        // Free form data
+        if (self.form) |*form| {
+            var form_it = form.iterator();
+            while (form_it.next()) |entry| {
+                self.allocator.free(entry.key_ptr.*);
+                self.allocator.free(entry.value_ptr.*);
+            }
+            form.deinit();
+        }
+
+        // Free multipart data
+        if (self.multipart) |*multipart| {
+            for (multipart.items) |part| {
+                self.allocator.free(part.name);
+                if (part.filename) |filename| {
+                    self.allocator.free(filename);
+                }
+                self.allocator.free(part.content_type);
+                self.allocator.free(part.data);
+            }
+            multipart.deinit();
+        }
     }
 
     /// Checks if the request should keep the connection alive.
@@ -173,7 +237,13 @@ fn parseHeaders(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, 
 
         // Parse cookies if the header is "Cookie"
         if (std.ascii.eqlIgnoreCase(name, "Cookie")) {
-            req.cookies = try cookie.parseCookies(allocator, value);
+            var cookie_map = try cookie.parseCookies(allocator, value);
+            var cookie_it = cookie_map.iterator();
+            while (cookie_it.next()) |entry| {
+                try req.cookies.put(entry.key_ptr.*, entry.value_ptr.*);
+            }
+            // Do not deinit cookie_map entries, as they are now owned by req.cookies
+            cookie_map.deinit();
         }
 
         header_count += 1;
@@ -200,25 +270,36 @@ fn parseBody(allocator: std.mem.Allocator, data: []const u8, req: *Request) !voi
         if (req.headers.get("Content-Type")) |ct| {
             switch (ContentType.fromString(ct)) {
                 .json => {
-                    var parsed = try std.json.parseFromSlice(
+                    // Create an arena for JSON parsing
+                    var arena = try allocator.create(std.heap.ArenaAllocator);
+                    arena.* = std.heap.ArenaAllocator.init(allocator);
+                    errdefer {
+                        arena.deinit();
+                        allocator.destroy(arena);
+                    }
+
+                    const arena_allocator = arena.allocator();
+                    const parsed = try std.json.parseFromSlice(
                         std.json.Value,
-                        allocator,
+                        arena_allocator,
                         req.body.?,
                         .{ .allocate = .alloc_always },
                     );
                     req.json = parsed.value;
-                    parsed.deinit();
+                    req.json_arena = arena;
+                    // Do not call parsed.deinit() here, as we store the arena
                 },
                 .form_urlencoded => {
-                    req.form = std.StringHashMap([]const u8).init(allocator);
+                    var form = std.StringHashMap([]const u8).init(allocator);
                     var pairs = std.mem.splitScalar(u8, req.body.?, '&');
                     while (pairs.next()) |pair| {
                         if (pair.len == 0) continue;
                         const eq = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
                         const key = try decodeUri(allocator, pair[0..eq]);
                         const value = try decodeUri(allocator, pair[eq + 1 ..]);
-                        try req.form.?.put(key, value);
+                        try form.put(key, value);
                     }
+                    req.form = form;
                 },
                 .multipart_form_data => {
                     if (std.mem.indexOf(u8, ct, "boundary=")) |b| {

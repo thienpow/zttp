@@ -3,70 +3,276 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ site_name // "ZTTP Showcase (Zig + HTMX)" }}</title> <!-- Updated Title -->
     <script src="https://unpkg.com/htmx.org@2.0.4" integrity="sha384-HGfztofotfshcF7+8n44JQL2oJmowVChPTg48S+jvZoztPfvwD79OC/LTtG6dMp+" crossorigin="anonymous"></script>
 
     <style>
-        body { font-family: sans-serif; margin: 20px; line-height: 1.6; }
-        header, footer { background-color: #f0f0f0; padding: 15px; margin-bottom: 20px; border-radius: 5px; }
-        header h1 { margin: 0; }
-        main { border: 1px solid #ccc; padding: 20px; border-radius: 5px; }
-        nav ul { list-style: none; padding: 0; margin: 10px 0 0 0; }
-        nav ul li { display: inline; margin-right: 15px; }
-        nav a { text-decoration: none; color: #007bff; }
-        nav a:hover { text-decoration: underline; }
-        footer { margin-top: 20px; font-size: 0.9em; color: #555; }
-        .flash-message { padding: 10px; margin-bottom: 15px; border-radius: 4px; }
-        .flash-success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-        .flash-error { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        /* Basic Reset & Body Styling */
+        *, *::before, *::after { box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+            margin: 0;
+            padding: 0;
+            line-height: 1.6;
+            background-color: #f8f9fa;
+            color: #333;
+            &.no-scroll { overflow: hidden; }
+        }
+
+        /* Centering Container */
+        .container {
+            max-width: 1100px; /* Slightly wider for more menu items */
+            margin: 20px auto;
+            padding: 0 15px;
+            background-color: #ffffff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden; /* Contains floats and margins */
+        }
+
+        /* Header Styling */
+        header {
+            background-color: #e9ecef;
+            padding: 15px 25px;
+            border-bottom: 1px solid #dee2e6;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: relative;
+        }
+        header h1 {
+            margin: 0;
+            font-size: 1.7em; /* Adjusted size */
+            color: #212529;
+            white-space: nowrap; /* Prevent wrap if possible */
+        }
+
+        /* --- Desktop Navigation --- */
+        #main-nav { display: block; }
+        #main-nav ul {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            display: flex; /* Use flex for better alignment/spacing */
+            align-items: center;
+        }
+        #main-nav ul li {
+            display: block; /* Let flex control layout */
+            margin-left: 18px; /* Adjust spacing */
+        }
+        #main-nav a {
+            text-decoration: none;
+            color: #007bff;
+            padding: 5px 0;
+            transition: color 0.2s ease;
+            font-size: 0.95em; /* Slightly smaller nav links */
+            white-space: nowrap; /* Prevent link text wrapping */
+        }
+        #main-nav a:hover, #main-nav a:focus {
+            color: #0056b3;
+            text-decoration: underline;
+        }
+        /* Add indicator for active link (requires server-side logic or JS) */
+        /* #main-nav a.active { font-weight: bold; color: #0056b3; } */
+
+        /* Hamburger Menu Button (Hidden on Desktop) */
+        #mobile-menu-toggle {
+            display: none;
+            background: none; border: none; padding: 8px;
+            cursor: pointer; z-index: 1001;
+        }
+        #mobile-menu-toggle .icon-bar {
+            display: block; width: 22px; height: 2px;
+            background-color: #333; border-radius: 1px; margin: 4px 0;
+            transition: transform 0.3s ease, opacity 0.3s ease;
+        }
+        body.mobile-nav-open #mobile-menu-toggle .icon-bar:nth-child(1) { transform: translateY(6px) rotate(45deg); }
+        body.mobile-nav-open #mobile-menu-toggle .icon-bar:nth-child(2) { opacity: 0; }
+        body.mobile-nav-open #mobile-menu-toggle .icon-bar:nth-child(3) { transform: translateY(-6px) rotate(-45deg); }
+
+        /* Main Content Area */
+        main { padding: 25px; min-height: 300px; }
+
+        /* Footer Styling */
+        footer {
+            background-color: #f8f9fa; padding: 15px 25px;
+            margin-top: 20px; font-size: 0.9em; color: #6c757d;
+            border-top: 1px solid #dee2e6; text-align: center;
+        }
+        footer p { margin: 0; }
+
+        /* Flash Message Styling (Unchanged) */
+        .flash-message { padding: 12px 15px; margin-bottom: 20px; border-radius: 5px; border: 1px solid transparent; }
+        .flash-success { background-color: #d1e7dd; color: #0f5132; border-color: #badbcc; }
+        .flash-error { background-color: #f8d7da; color: #842029; border-color: #f5c2c7; }
+
+        /* Mobile Menu Overlay */
+        #menu-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(0, 0, 0, 0.5); z-index: 999;
+        }
+        body.mobile-nav-open #menu-overlay { display: block; }
+
+        /* --- Mobile Responsiveness & Hamburger Menu --- */
+        @media (max-width: 992px) { /* Adjusted breakpoint slightly for longer menu */
+            .container {
+                margin: 0 auto; padding: 0; border-radius: 0;
+                box-shadow: none; max-width: 100%;
+            }
+            header { padding: 10px 15px; }
+            header h1 { font-size: 1.5em; }
+
+            #mobile-menu-toggle { display: block; }
+
+            #main-nav {
+                position: fixed; top: 0; left: 0; width: 280px; max-width: 80%;
+                height: 100vh; background-color: #fff; padding: 60px 20px 20px 20px;
+                box-shadow: 2px 0 5px rgba(0,0,0,0.2); transform: translateX(-100%);
+                transition: transform 0.3s ease-in-out; z-index: 1000; overflow-y: auto;
+            }
+            body.mobile-nav-open #main-nav { transform: translateX(0); }
+
+            #main-nav ul { display: block; text-align: left; } /* Stack vertically */
+            #main-nav ul li {
+                display: block; margin-left: 0; margin-bottom: 5px;
+                border-bottom: 1px solid #eee;
+            }
+             #main-nav ul li:last-child { border-bottom: none; }
+            #main-nav a {
+                display: block; padding: 12px 5px; color: #333;
+                font-weight: 500; font-size: 1em; /* Reset font size */
+            }
+             #main-nav a:hover, #main-nav a:focus {
+                 background-color: #f0f0f0; color: #0056b3; text-decoration: none;
+             }
+
+            main { padding: 20px 15px; }
+            footer { padding: 15px; }
+        }
+
+        @media (max-width: 480px) {
+             header h1 { font-size: 1.3em; }
+             #main-nav { width: 250px; }
+        }
     </style>
     <script>
       htmx.config.scrollIntoViewOnBoost = false;
     </script>
+    <!-- Include global components JS if you have one -->
     <script src="/static/components/global.js"></script>
 
 </head>
-<body>
+<body> <!-- Consider id="page-body" if needed -->
 
-    <header>
-        <h1>{{ site_name // "ZTTP Showcase" }}</h1>
-        <nav>
-             <ul>
-                <li><a href="/" hx-target="main" hx-boost="true">Home</a></li>
-                <li><a href="/about" hx-target="main" hx-boost="true">About</a></li>
-                <li><a href="/demo/conditionals" hx-target="main" hx-boost="true">Conditionals</a></li>
-                <li><a href="/demo/components" hx-target="main" hx-boost="true">Components</a></li>
-                <li><a href="/users/123" hx-target="main" hx-boost="true">User Example (ID 123)</a></li>
-                <li><a href="/api/json" hx-target="main" hx-boost="true">JSON API</a></li>
-                #if logged_in == "true" // Compare string value set in context
-                    <li><a href="/profile" hx-target="main" hx-boost="true">Profile ({{ username }})</a></li>
-                    <li><a href="/logout" hx-target="main" hx-boost="true">Logout</a></li>
-                #else
-                    <li><a href="/login" hx-target="main" hx-boost="true">Login</a></li>
-                #endif
-            </ul>
-        </nav>
-    </header>
+    <div class="container">
 
-    <main>
-        #if message // Display flash messages (e.g., after login)
-            <div class="flash-message flash-success">{{ message }}</div>
-        #endif
-        #if error_message // Display error messages (e.g., login failure)
-             <div class="flash-message flash-error">{{ error_message }}</div>
-        #endif
+        <header>
+            <h1>{{ site_name // "ZTTP Showcase" }}</h1>
 
-        #block content
-            <h2>Default Content Area</h2>
-            <p>This content appears if the child template does not define a 'content' block.</p>
-        #endblock
-    </main>
+            <!-- Hamburger Button -->
+            <button id="mobile-menu-toggle" aria-label="Toggle menu" aria-expanded="false" aria-controls="main-nav">
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+            </button>
 
-    <footer>
-        <p>&copy; 2025 {{ site_name // "ZTTP Showcase" }}. All rights reserved.</p>
-        #block footer_extra
-            <!-- Optional extra footer content -->
-        #endblock
-    </footer>
+            <!-- Navigation - Updated Links -->
+            <nav id="main-nav">
+                 <ul>
+                    <!-- Use hx-boost and hx-target for SPA-like navigation within the showcase -->
+                    <li><a href="/" hx-target="main" hx-boost="true">Home</a></li>
+                    <li><a href="/why" hx-target="main" hx-boost="true">Why ZTTP?</a></li>
+                    <li><a href="/concepts" hx-target="main" hx-boost="true">Core Concepts</a></li>
+                    <li><a href="/demos" hx-target="main" hx-boost="true">Live Demos</a></li>
+                    <li><a href="/getting-started" hx-target="main" hx-boost="true">Get Started</a></li>
+                    <li><a href="/docs" hx-target="main" hx-boost="true">API Docs</a></li>
+                    <!-- Example Auth Links (Keep if relevant for demos) -->
+                    #if logged_in == "true"
+                        <li><a href="/profile" hx-target="main" hx-boost="true">Profile ({{ username }})</a></li>
+                        <li><a href="/logout" hx-target="main" hx-boost="true">Logout</a></li>
+                    #else
+                        <!-- Maybe link to an auth demo instead of top-level login? -->
+                        <!-- <li><a href="/login" hx-target="main" hx-boost="true">Login</a></li> -->
+                    #endif
+                </ul>
+            </nav>
+        </header>
+
+        <main>
+            #if message
+                <div class="flash-message flash-success">{{ message }}</div>
+            #endif
+            #if error_message
+                 <div class="flash-message flash-error">{{ error_message }}</div>
+            #endif
+
+            #block content
+                <!-- Default content if child template doesn't define 'content' -->
+                <h2>Welcome to the ZTTP Showcase!</h2>
+                <p>Select an item from the menu to learn more about building web applications with Zig and HTMX using ZTTP.</p>
+            #endblock
+        </main>
+
+        <footer>
+            <p>&copy; {{ std.datetime.timestamp() | date:"%Y" }} {{ site_name // "ZTTP Showcase" }}. Built with ZTTP!</p>
+            #block footer_extra
+                <!-- Optional extra footer content -->
+            #endblock
+        </footer>
+
+    </div> <!-- / .container -->
+
+    <!-- Menu Overlay -->
+    <div id="menu-overlay"></div>
+
+    <!-- Keep the existing JavaScript for menu toggling -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const menuToggle = document.getElementById('mobile-menu-toggle');
+            const mainNav = document.getElementById('main-nav');
+            const menuOverlay = document.getElementById('menu-overlay');
+            const body = document.body;
+
+            function openMenu() {
+                body.classList.add('mobile-nav-open', 'no-scroll');
+                menuToggle.setAttribute('aria-expanded', 'true');
+            }
+
+            function closeMenu() {
+                body.classList.remove('mobile-nav-open', 'no-scroll');
+                menuToggle.setAttribute('aria-expanded', 'false');
+            }
+
+            menuToggle.addEventListener('click', (event) => {
+                event.stopPropagation();
+                if (body.classList.contains('mobile-nav-open')) closeMenu();
+                else openMenu();
+            });
+
+            menuOverlay.addEventListener('click', closeMenu);
+
+            mainNav.addEventListener('click', (event) => {
+                // Close menu if a link *inside* the nav is clicked
+                if (event.target.tagName === 'A' && event.target.closest('#main-nav')) {
+                     // Check if the menu is actually open (relevant on desktop hover states sometimes)
+                     if (body.classList.contains('mobile-nav-open')) {
+                         closeMenu();
+                     }
+                }
+            });
+
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && body.classList.contains('mobile-nav-open')) closeMenu();
+            });
+
+            window.addEventListener('resize', () => {
+                // Use the same breakpoint as the CSS media query
+                if (window.innerWidth > 992 && body.classList.contains('mobile-nav-open')) closeMenu();
+            });
+        });
+    </script>
+    <!-- Date Filter Placeholder - Assumes ZTTP has or will have template filters -->
+    <!-- If no date filter exists, replace {{ std.datetime.timestamp() | date:"%Y" }} with a static year or pass year in context -->
 
 </body>
 </html>

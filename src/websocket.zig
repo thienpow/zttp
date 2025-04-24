@@ -12,6 +12,18 @@ pub const WebSocket = struct {
         return .{ .socket = socket, .allocator = allocator, .is_open = true };
     }
 
+    pub fn readBlocking(self: *WebSocket, buffer: []u8) !usize {
+        if (!self.is_open) return error.WebSocketClosed;
+
+        const bytes_read = try std.posix.read(self.socket, buffer);
+        if (bytes_read == 0) {
+            // Connection closed by peer
+            self.is_open = false;
+            return 0;
+        }
+        return bytes_read;
+    }
+
     pub fn handleHandshake(req: *const Request, res: *Response) !bool {
         // Check WebSocket upgrade headers
         if (!std.mem.eql(u8, req.headers.get("Upgrade") orelse "", "websocket")) return false;
@@ -37,27 +49,58 @@ pub const WebSocket = struct {
         return true;
     }
 
-    pub fn sendMessage(self: *WebSocket, message: []const u8) !void {
-        if (!self.is_open) return error.ConnectionClosed;
-        // Send text frame (opcode 0x1, FIN bit set)
-        var frame: [4096]u8 = undefined;
-        frame[0] = 0x81; // FIN + Text frame
-        if (message.len <= 125) {
-            frame[1] = @as(u8, @intCast(message.len));
-            @memcpy(frame[2 .. 2 + message.len], message);
-            _ = try std.posix.send(self.socket, frame[0 .. 2 + message.len], 0); // Discard return value
+    pub fn sendFrame(self: *WebSocket, opcode: u8, payload: []const u8) !void {
+        if (!self.is_open) return error.WebSocketClosed;
+
+        // Construct WebSocket frame: FIN=1, RSV=0, opcode, payload length, payload
+        var frame = std.ArrayList(u8).init(self.allocator);
+        defer frame.deinit();
+
+        // Header: FIN=1, RSV=0, opcode
+        try frame.append(0x80 | (opcode & 0x0F));
+
+        // Payload length
+        if (payload.len <= 125) {
+            try frame.append(@intCast(payload.len));
+        } else if (payload.len <= 0xFFFF) {
+            try frame.append(126);
+            try frame.appendSlice(&[_]u8{
+                @intCast((payload.len >> 8) & 0xFF),
+                @intCast(payload.len & 0xFF),
+            });
         } else {
-            // Handle larger payloads if needed
-            return error.PayloadTooLarge;
+            try frame.append(127);
+            try frame.appendSlice(&[_]u8{
+                @intCast((payload.len >> 56) & 0xFF),
+                @intCast((payload.len >> 48) & 0xFF),
+                @intCast((payload.len >> 40) & 0xFF),
+                @intCast((payload.len >> 32) & 0xFF),
+                @intCast((payload.len >> 24) & 0xFF),
+                @intCast((payload.len >> 16) & 0xFF),
+                @intCast((payload.len >> 8) & 0xFF),
+                @intCast(payload.len & 0xFF),
+            });
         }
+
+        // Payload
+        try frame.appendSlice(payload);
+
+        // Send frame
+        _ = try std.posix.send(self.socket, frame.items, 0);
+    }
+
+    pub fn sendMessage(self: *WebSocket, message: []const u8) !void {
+        // Delegate to sendFrame with text frame opcode (0x1)
+        try self.sendFrame(0x1, message);
     }
 
     pub fn close(self: *WebSocket) void {
         if (self.is_open) {
-            const close_frame = [_]u8{ 0x88, 0x00 }; // Close frame
-            _ = std.posix.send(self.socket, &close_frame, 0) catch {}; // Discard return value
+            const close_frame = [_]u8{ 0x88, 0x00 }; // Close frame (FIN=1, opcode=0x8, no payload)
+            _ = std.posix.send(self.socket, &close_frame, 0) catch {};
             std.posix.close(self.socket);
             self.is_open = false;
+            self.socket = -1; // Mark as invalid to prevent double-close
         }
     }
 };

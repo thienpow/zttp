@@ -2,52 +2,231 @@
 
 #block content
     <title>ZTTP Showcase - Home</title>
-    <h2>{{ page_heading // "Welcome!" }}</h2>
+    <link rel="stylesheet" href="/static/highlight.css">
 
-    #if post_message
-        <div style="background-color: #e0f7fa; border: 1px solid #00bcd4; padding: 10px; margin-bottom: 15px; border-radius: 4px;">
-            <strong>POST Result:</strong> {{ post_message }}
+    <style>
+        /* --- Existing Hero, Features, Next Steps styles --- */
+        .hero-section {
+            background-color: #f8f9fa; padding: 2.5rem 1.5rem; text-align: center;
+            margin: -25px -25px 2rem -25px; border-bottom: 1px solid #dee2e6;
+        }
+        .hero-section h1 { font-size: 2.4em; margin-bottom: 0.5rem; color: #343a40; }
+        .hero-section .tagline { font-size: 1.15em; color: #495057; max-width: 650px; margin: 0 auto 1.5rem auto; }
+        /* Add styles for the button if not globally defined */
+        .hero-section .btn.btn-primary {
+            display: inline-block; padding: 0.75rem 1.5rem; font-size: 1.1em; color: #fff;
+            background-color: #007bff; border-color: #007bff; border-radius: 5px;
+            text-decoration: none; transition: background-color 0.2s ease;
+        }
+        .hero-section .btn.btn-primary:hover { background-color: #0056b3; border-color: #0056b3; }
+
+        .features-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 1.5rem; margin-top: 2rem; margin-bottom: 2.5rem;
+        }
+        .feature-card {
+            background-color: #ffffff; padding: 1.5rem; border: 1px solid #e9ecef;
+            border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+            transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+        }
+        .feature-card:hover { transform: translateY(-3px); box-shadow: 0 4px 10px rgba(0,0,0,0.08); }
+        .feature-card h3 { margin-top: 0; color: #0056b3; font-size: 1.2em; margin-bottom: 0.75rem; }
+        .feature-card p { font-size: 0.95em; line-height: 1.6; color: #495057; }
+        .feature-card code { background-color: #e9ecef; padding: 0.2em 0.4em; border-radius: 3px; font-size: 0.85em; }
+
+        .next-steps {
+            text-align: center; padding: 2rem 1rem; background-color: #f8f9fa;
+            border-radius: 8px; margin-top: 2rem;
+        }
+        .next-steps h2 { margin-top: 0; margin-bottom: 1.5rem; }
+        .next-steps ul { list-style: none; padding: 0; margin: 0; }
+        .next-steps li { margin-bottom: 0.5rem; }
+        .next-steps a { font-weight: 500; }
+
+        /* --- Styles for the NEW Code Example Section --- */
+        .code-example-section {
+            margin: 3rem 0;
+            padding: 2rem 0;
+            border-top: 1px solid #e9ecef;
+             border-bottom: 1px solid #e9ecef;
+        }
+        .code-example-section h2 {
+            text-align: center;
+            margin-bottom: 1.5rem;
+        }
+        .code-intro-text {
+            text-align: center;
+            max-width: 700px;
+            margin: 0 auto 2rem auto;
+            color: #495057;
+        }
+        .code-columns {
+            display: flex;
+            gap: 1.5rem; /* Spacing between columns */
+        }
+        .code-column {
+            flex: 1; /* Each column takes equal space */
+            min-width: 0; /* Prevent flex overflow */
+        }
+        .code-column h4 {
+            margin-top: 0;
+            margin-bottom: 0.75rem;
+            font-size: 1.1em;
+            color: #343a40;
+             padding-left: 10px; /* Align with code block padding */
+             border-left: 3px solid #007bff;
+        }
+        .code-column pre {
+            background-color: #282c34; /* Example dark theme for code */
+            color: #abb2bf; /* Example light text color */
+            padding: 1rem;
+            border-radius: 6px;
+            overflow-x: auto;
+            font-size: 0.875em; /* Slightly smaller font for code */
+            line-height: 1.5;
+        }
+         .code-column code { /* Reset background/padding from feature card style */
+             background-color: transparent;
+             padding: 0;
+             font-size: inherit; /* Inherit from pre */
+         }
+
+
+        /* --- Responsive adjustments --- */
+        @media (max-width: 992px) {
+            .hero-section { margin: -20px -15px 1.5rem -15px; }
+            .hero-section h1 { font-size: 2em; }
+            .hero-section .tagline { font-size: 1.1em; }
+            /* Stack code columns on smaller screens */
+            .code-columns { flex-direction: column; }
+            .code-column { margin-bottom: 1.5rem; }
+            .code-column:last-child { margin-bottom: 0; }
+        }
+        @media (max-width: 480px) {
+            .hero-section h1 { font-size: 1.8em; }
+            .features-grid { grid-template-columns: 1fr; }
+            .code-column pre { font-size: 0.8em; padding: 0.8rem; }
+        }
+
+    </style>
+
+    <div class="hero-section">
+        <h1>{{ page_heading // "Build Web Apps with Zig + HTMX" }}</h1>
+        <p class="tagline">
+            Welcome to the ZTTP Showcase! Discover how the <strong>ZTTP</strong> framework simplifies web development
+            by combining the performance and safety of <strong>Zig</strong> with the dynamic UI capabilities of <strong>HTMX</strong>.
+        </p>
+        <a href="/getting-started" hx-target="main" hx-boost="true" class="btn btn-primary">Get Started Now</a>
+    </div>
+
+    <div class="features-grid">
+        <div class="feature-card">
+            <h3>⚡️ Zig Performance & Safety</h3>
+            <p>Leverage Zig's speed, memory safety features, and comptime capabilities for robust backend logic. Build efficient and maintainable web services.</p>
         </div>
-    #endif
+        <div class="feature-card">
+            <h3>🌐 HTMX-Powered Frontends</h3>
+            <p>Create modern, interactive user interfaces directly within your HTML using HTMX attributes. Reduce JavaScript complexity significantly.</p>
+        </div>
+        <div class="feature-card">
+            <h3>📝 Simple & Powerful Templating</h3>
+            <p>Use an intuitive template engine (<code>#block</code>, <code>#if</code>, <code>{{ variable }}</code>) inspired by Go templates and Mustache for rendering dynamic HTML.</p>
+        </div>
+        <div class="feature-card">
+            <h3>⚙️ Developer-Friendly</h3>
+            <p>Focus on your application logic with features like middleware support, automatic route generation (via <code>routegen</code>), and clear request/response handling.</p>
+        </div>
+    </div>
 
-    <p>This is the main content area for the index page.</p>
+    <div class="code-example-section">
+        <h2>Code Sneak Peek</h2>
+        <p class="code-intro-text">
+            Here's a glimpse of how easy it is to define a simple route handler in Zig
+            and its corresponding ZMX template using ZTTP.
+        </p>
+        <div class="code-columns">
+            <div class="code-column">
+                <h4>Zig Handler (`src/routes/demos/greet.zig`)</h4>
+                ```zig
+                const zttp = @import("zttp");
+                const Request = zttp.Request;
+                const Response = zttp.Response;
+                const Context = zttp.Context;
 
-    #if logged_in == "true"
-        <p>Welcome back, <strong>{{ username }}</strong>!</p>
-        <h3>Your Items:</h3>
-        <!-- SIMPLIFIED Check: Use the special 'var != ""' syntax only -->
-        <!-- This maps directly to Condition.non_empty -->
-        #if items != ""
-            <ul>
-                 #for item in items
-                     <li>{{ item }}</li>
-                 #endfor
-            </ul>
-        #else
-            <p>You have no items listed (items is empty or not set).</p>
+                pub fn get(req: *zttp.Request, res: *zttp.Response, ctx: *zttp.Context) void {
+                    _ = req; // Request unused in this simple example
+                    res.status = .ok;
+
+                    // Get name from query or default
+                    const name = req.query.get("name") orelse "World";
+
+                    // Allocate and set name for the template
+                    const alloc = res.arena.allocator();
+                    const name_for_ctx = std.fmt.allocPrint(alloc, "{s}", .{name}) catch |err| {
+                        std.log.err("Failed to allocate name: {any}", .{err});
+                        "World"; // Fallback
+                    };
+
+                    ctx.set("person_name", name_for_ctx) catch |err| {
+                         std.log.err("Failed to set ctx: {any}", .{err});
+                    };
+                }
+                ```
+                <div class="code-column"><h4>ZMX Template (`src/routes/demos/greet.zmx`)</h4>
+                ```zmx
+                <!-- src/routes/demos/greet.zmx -->
+                #extends "layout"
+
+                #block content
+                    <title>ZTTP Demo - Greet</title>
+
+                    <h2>Greetings!</h2>
+
+                    <p>Hello, <strong>{{ person_name // "Mysterious Stranger" }}</strong>!</p>
+
+                    <hr>
+
+                    <p>Try greeting someone else via the URL query parameter:</p>
+                    <ul>
+                        <li><a href="/demos/greet?name=Ziggy"
+                               hx-boost="true"
+                               hx-target="main">Greet Ziggy</a></li>
+                        <li><a href="/demos/greet?name=HTMX"
+                               hx-boost="true"
+                               hx-target="main">Greet HTMX</a></li>
+                         <li><a href="/demos/greet"
+                                hx-boost="true"
+                                hx-target="main">Greet the World (Default)</a></li>
+                    </ul>
+
+                    <p><small><em>(This page demonstrates reading a query parameter in the Zig handler and passing it to the ZMX template.)</em></small></p>
+
+                #endblock
+                ```
+            </div>
+        </div>
+    </div>
+    <!-- END: Code Example Section -->
+
+
+    <div class="next-steps">
+        <h2>Explore the Showcase</h2>
+        <p>Dive deeper by exploring the sections in the navigation menu:</p>
+        <ul>
+            <li>Learn <a href="/why" hx-target="main" hx-boost="true">Why ZTTP?</a> was created.</li>
+            <li>Understand the <a href="/concepts" hx-target="main" hx-boost="true">Core Concepts</a> behind the framework.</li>
+            <li>See <a href="/demos" hx-target="main" hx-boost="true">Live Demos</a> of ZTTP and HTMX in action.</li>
+            <li>Follow the <a href="/getting-started" hx-target="main" hx-boost="true">Get Started</a> guide.</li>
+            <li>Consult the <a href="/docs" hx-target="main" hx-boost="true">API Docs</a> for technical details.</li>
+        </ul>
+
+        #if logged_in == "true"
+            <p style="margin-top: 1.5rem; font-style: italic; color: #6c757d;">Welcome back, <strong>{{ username // "User" }}</strong>!</p>
         #endif
-
-    #else
-        <p>Welcome, Guest! Please <a href="/login" hx-target="main" hx-boost="true">log in</a> or visit with <a href="/?logged_in=true" hx-target="main" hx-boost="true">?logged_in=true</a> to see more.</p>
-        <hr>
-         <p>Or submit this simple form via POST:</p>
-        <form action="/" method="post">
-             <label for="post-username">Username:</label>
-             <input type="text" id="post-username" name="username" value="testuser">
-             <button type="submit">Submit POST</button>
-        </form>
-    #endif
-
-    <hr>
-    <p><em>Demo Context Values:</em></p>
-    <ul>
-        <li>Role: {{ role // "not set" }}</li>
-        <li>Show Details: {{ show_details // "not set" }}</li>
-        <li>Theme: {{ theme // "not set" }}</li>
-    </ul>
+    </div>
 
 #endblock
 
 #block footer_extra
-    <p>Index page specific footer information.</p>
+    <p>ZTTP - Bringing the power of Zig and HTMX together.</p>
 #endblock

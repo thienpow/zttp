@@ -1,5 +1,8 @@
 const std = @import("std");
 const HttpMethod = @import("zttp").HttpMethod;
+const Route = @import("zttp").Route;
+const Template = @import("zttp").Template;
+const WebSocketHandlerFn = @import("zttp").WebSocketHandlerFn;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -64,6 +67,7 @@ pub fn generateRoutesAndTemplates(allocator: std.mem.Allocator, routes_dir_path:
         path: []const u8,
         method: HttpMethod,
         handler_name: []const u8,
+        is_websocket: bool,
     }).init(allocator);
     defer {
         for (routes.items) |r| {
@@ -124,6 +128,7 @@ pub fn generateRoutesAndTemplates(allocator: std.mem.Allocator, routes_dir_path:
         };
         defer allocator.free(zig_file_content);
 
+        // Check for HTTP handlers
         for (http_methods) |method| {
             const method_str = @tagName(method);
             const handler_signature = try std.fmt.allocPrint(allocator, "pub fn {s}(", .{method_str});
@@ -145,6 +150,27 @@ pub fn generateRoutesAndTemplates(allocator: std.mem.Allocator, routes_dir_path:
                 .path = try allocator.dupe(u8, route_path),
                 .method = method,
                 .handler_name = try allocator.dupe(u8, method_str),
+                .is_websocket = false,
+            });
+        }
+
+        // Check for WebSocket handler
+        const ws_handler_signature = "pub fn ws(";
+        if (std.mem.indexOf(u8, zig_file_content, ws_handler_signature) != null) {
+            // Create the import path (routes/...)
+            var import_path_buf = std.ArrayList(u8).init(allocator);
+            defer import_path_buf.deinit();
+            try import_path_buf.appendSlice("routes/");
+            try import_path_buf.appendSlice(entry.path);
+            const import_path = try import_path_buf.toOwnedSlice();
+
+            try routes.append(.{
+                .module = try allocator.dupe(u8, module_name),
+                .import_path = import_path,
+                .path = try allocator.dupe(u8, route_path),
+                .method = .get, // WebSocket upgrades use GET
+                .handler_name = try allocator.dupe(u8, "ws"),
+                .is_websocket = true,
             });
         }
 
@@ -174,8 +200,6 @@ pub fn generateRoutesAndTemplates(allocator: std.mem.Allocator, routes_dir_path:
         var name_buf = std.ArrayList(u8).init(allocator);
         defer name_buf.deinit();
         const relative_path = entry.path[0 .. entry.path.len - 4]; // Remove ".zmx"
-
-        // Always keep the full relative path as the template name
         try name_buf.appendSlice(relative_path);
         const template_name = try name_buf.toOwnedSlice();
 
@@ -220,7 +244,7 @@ pub fn generateRoutesAndTemplates(allocator: std.mem.Allocator, routes_dir_path:
             \\    try routes.append(Route{
             \\        .module_name = try allocator.dupe(u8, "
         );
-        try buf.appendSlice(route.module);
+        try buf.appendSlice(if (route.is_websocket) "websocket" else route.module);
         try buf.appendSlice(
             \\"),
             \\        .method = .
@@ -233,7 +257,11 @@ pub fn generateRoutesAndTemplates(allocator: std.mem.Allocator, routes_dir_path:
         try buf.appendSlice(route.path);
         try buf.appendSlice(
             \\"),
-            \\        .handler = @import("
+            \\        .
+        );
+        try buf.appendSlice(if (route.is_websocket) "ws_handler" else "handler");
+        try buf.appendSlice(
+            \\ = @import("
         );
         try buf.appendSlice(route.import_path);
         try buf.appendSlice(
@@ -289,5 +317,5 @@ pub fn generateRoutesAndTemplates(allocator: std.mem.Allocator, routes_dir_path:
         \\}
     );
 
-    //std.debug.print("Generated {s} with {} routes and {} templates\n", .{ output_file, routes.items.len, templates.items.len });
+    std.debug.print("Generated {s} with {} routes and {} templates\n", .{ output_file, routes.items.len, templates.items.len });
 }

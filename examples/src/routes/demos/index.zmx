@@ -1,0 +1,129 @@
+#extends "layout"
+
+#block content
+    <title>ZTTP Showcase - Live Demos</title>
+    <style>
+        /* Styles for the accordion are expected to come from the included component */
+        /* Remove the old .demo-list styles */
+
+        /* Optional: Add some spacing below the accordion group */
+        .accordion-group {
+            margin-bottom: 1.5rem;
+        }
+
+        /* Style links within accordion content for better visibility */
+        .accordion-content h3 {
+             margin-top: 0; /* Reset margin if needed */
+             margin-bottom: 0.75rem;
+        }
+        .accordion-content h3 a {
+            text-decoration: none;
+            color: #0056b3;
+            font-weight: 600; /* Make link stand out */
+        }
+        .accordion-content h3 a:hover {
+            text-decoration: underline;
+        }
+         .accordion-content p {
+             margin-bottom: 0.5rem;
+             color: #495057;
+             font-size: 0.95em;
+         }
+        .accordion-content code {
+             background-color: #e9ecef;
+             padding: 0.2em 0.4em;
+             border-radius: 3px;
+             font-size: 0.9em;
+        }
+        .accordion-content ul {
+            margin-top: 0.5rem;
+            padding-left: 20px; /* Indent nested list */
+        }
+        .accordion-content ul li {
+            margin-bottom: 0.3rem;
+        }
+
+        /* Style for the added "Visit Demo" button */
+        .accordion-content .visit-button {
+            margin-top: 0.75rem; /* Add some space above the button */
+            /* display: inline-block;  No longer needed for <button> */
+        }
+
+    </style>
+
+
+    <h1>Live Demos</h1>
+    <p>Explore various features and patterns implemented using ZTTP and HTMX. Select a demo below to see it in action.</p>
+    <hr>
+
+    #include "components/accordion"
+    #include "components/button"
+    <div class="accordion-group">
+        <!-- Demo Item 1: Components -->
+        <div class="accordion">
+            <div class="accordion-header">UI Components</div>
+            <div class="accordion-content">
+                <h3><a href="/demos/components" hx-target="main" hx-boost="true">UI Components</a></h3>
+                <p>Examples of common UI elements like buttons, modals, accordions, tabs, dropdowns, and tooltips, often powered by minimal JavaScript.</p>
+                <p>Location: <code>/demos/components</code></p>
+                <button hx-get="/demos/components" hx-target="main" hx-boost="true" class="btn visit-button" data-variant="outline" data-size="sm">Visit Demo</button>
+            </div>
+        </div>
+
+        <!-- Demo Item 2: Conditionals -->
+        <div class="accordion">
+            <div class="accordion-header">Template Conditionals</div>
+            <div class="accordion-content">
+                 <h3><a href="/demos/conditionals" hx-target="main" hx-boost="true">Template Conditionals</a></h3>
+                 <p>Showcase of the template engine's conditional logic: <code>&#35;if</code>, <code>&#35;elseif</code>, <code>&#35;else</code>, comparison operators (<code>==</code>, <code>!=</code>, <code>&gt;</code>, <code>&lt;=</code>, etc.), logical operators (<code>and</code>, <code>or</code>), and the non-empty check (<code>!= ""</code>).</p>
+                 <p>Location: <code>/demos/conditionals</code></p>
+                 <button hx-get="/demos/conditionals" hx-target="main" hx-boost="true" class="btn visit-button" data-variant="outline" data-size="sm">Visit Demo</button>
+            </div>
+        </div>
+
+        <!-- Demo Item 3: Login Simulation -->
+        <div class="accordion">
+            <div class="accordion-header">Login Simulation</div>
+            <div class="accordion-content">
+                <h3><a href="/demos/login" hx-target="main" hx-boost="true">Login Simulation</a></h3>
+                <p>Demonstrates basic form handling (POST request), simulated user authentication, redirects on success/failure, and displaying error messages.</p>
+                <p>Location: <code>/demos/login</code> (also involves <code>/logout</code>)</p>
+                <button hx-get="/demos/login" hx-target="main" hx-boost="true" class="btn visit-button" data-variant="outline" data-size="sm">Visit Demo</button>
+            </div>
+        </div>
+
+        <!-- Demo Item 4: Profile Page -->
+        <div class="accordion">
+            <div class="accordion-header">Profile Page (Custom Layout)</div>
+            <div class="accordion-content">
+                 <h3><a href="/demos/profile" hx-target="main" hx-boost="true">Profile Page (Custom Layout)</a></h3>
+                 <p>An example of a section (<code>/profile</code>) using its own distinct layout (<code>profile/layout.zmx</code>) nested within the application structure.</p>
+                 <p>Location: <code>/demos/profile</code></p>
+                 <button hx-get="/demos/profile" hx-target="main" hx-boost="true" class="btn visit-button" data-variant="outline" data-size="sm">Visit Demo</button>
+            </div>
+        </div>
+
+        <!-- Demo Item 5: Parameterized Routes -->
+        <div class="accordion">
+            <div class="accordion-header">Parameterized Routes</div>
+            <div class="accordion-content">
+                <h3><a href="/demos/users/123" hx-target="main" hx-boost="true">Parameterized Routes</a></h3>
+                <p>Example of handling dynamic URL segments. Try accessing different IDs:</p>
+                <ul>
+                    <li><a href="/demos/users/123" hx-target="main" hx-boost="true"><code>/demos/users/123</code></a></li>
+                    <li><a href="/demos/users/abc" hx-target="main" hx-boost="true"><code>/demos/users/abc</code></a></li>
+                    <li><a href="/demos/users/user-xyz" hx-target="main" hx-boost="true"><code>/demos/users/user-xyz</code></a></li>
+                </ul>
+                <p>The value after <code>/users/</code> is captured and available in the handler.</p>
+                 <p>Location: <code>/demos/users/:id</code></p>
+                 <button hx-get="/demos/users/123" hx-target="main" hx-boost="true" class="btn visit-button" data-variant="outline" data-size="sm">Visit Example (ID: 123)</button>
+            </div>
+        </div>
+
+    </div>
+
+#endblock
+
+#block footer_extra
+    <p>Explore the source code for these demos to see how they work!</p>
+#endblock

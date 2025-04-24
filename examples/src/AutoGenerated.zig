@@ -15,6 +15,12 @@ pub fn getRoutes(allocator: std.mem.Allocator) ![]const Route {
         routes.deinit();
     }
     try routes.append(Route{
+        .module_name = try allocator.dupe(u8, "websocket"),
+        .method = .get,
+        .path = try allocator.dupe(u8, "/ws"),
+        .ws_handler = @import("routes/ws.zig").ws,
+    });
+    try routes.append(Route{
         .module_name = try allocator.dupe(u8, "index"),
         .method = .get,
         .path = try allocator.dupe(u8, "/"),
@@ -22,21 +28,57 @@ pub fn getRoutes(allocator: std.mem.Allocator) ![]const Route {
     });
     try routes.append(Route{
         .module_name = try allocator.dupe(u8, "index"),
-        .method = .post,
-        .path = try allocator.dupe(u8, "/"),
-        .handler = @import("routes/index.zig").post,
+        .method = .get,
+        .path = try allocator.dupe(u8, "/demos"),
+        .handler = @import("routes/demos/index.zig").get,
     });
     try routes.append(Route{
         .module_name = try allocator.dupe(u8, "index"),
         .method = .get,
-        .path = try allocator.dupe(u8, "/users/:id"),
-        .handler = @import("routes/users/:id/index.zig").get,
+        .path = try allocator.dupe(u8, "/demos/conditionals"),
+        .handler = @import("routes/demos/conditionals/index.zig").get,
+    });
+    try routes.append(Route{
+        .module_name = try allocator.dupe(u8, "index"),
+        .method = .get,
+        .path = try allocator.dupe(u8, "/demos/users/:id"),
+        .handler = @import("routes/demos/users/:id/index.zig").get,
     });
     try routes.append(Route{
         .module_name = try allocator.dupe(u8, "index"),
         .method = .post,
-        .path = try allocator.dupe(u8, "/users/:id"),
-        .handler = @import("routes/users/:id/index.zig").post,
+        .path = try allocator.dupe(u8, "/demos/users/:id"),
+        .handler = @import("routes/demos/users/:id/index.zig").post,
+    });
+    try routes.append(Route{
+        .module_name = try allocator.dupe(u8, "index"),
+        .method = .get,
+        .path = try allocator.dupe(u8, "/demos/components"),
+        .handler = @import("routes/demos/components/index.zig").get,
+    });
+    try routes.append(Route{
+        .module_name = try allocator.dupe(u8, "index"),
+        .method = .get,
+        .path = try allocator.dupe(u8, "/demos/profile"),
+        .handler = @import("routes/demos/profile/index.zig").get,
+    });
+    try routes.append(Route{
+        .module_name = try allocator.dupe(u8, "login"),
+        .method = .get,
+        .path = try allocator.dupe(u8, "/demos/login"),
+        .handler = @import("routes/demos/login.zig").get,
+    });
+    try routes.append(Route{
+        .module_name = try allocator.dupe(u8, "login"),
+        .method = .post,
+        .path = try allocator.dupe(u8, "/demos/login"),
+        .handler = @import("routes/demos/login.zig").post,
+    });
+    try routes.append(Route{
+        .module_name = try allocator.dupe(u8, "logout"),
+        .method = .get,
+        .path = try allocator.dupe(u8, "/demos/logout"),
+        .handler = @import("routes/demos/logout.zig").get,
     });
     try routes.append(Route{
         .module_name = try allocator.dupe(u8, "json"),
@@ -49,48 +91,6 @@ pub fn getRoutes(allocator: std.mem.Allocator) ![]const Route {
         .method = .post,
         .path = try allocator.dupe(u8, "/api/json"),
         .handler = @import("routes/api/json.zig").post,
-    });
-    try routes.append(Route{
-        .module_name = try allocator.dupe(u8, "index"),
-        .method = .get,
-        .path = try allocator.dupe(u8, "/demo/conditionals"),
-        .handler = @import("routes/demo/conditionals/index.zig").get,
-    });
-    try routes.append(Route{
-        .module_name = try allocator.dupe(u8, "index"),
-        .method = .get,
-        .path = try allocator.dupe(u8, "/demo/components"),
-        .handler = @import("routes/demo/components/index.zig").get,
-    });
-    try routes.append(Route{
-        .module_name = try allocator.dupe(u8, "index"),
-        .method = .get,
-        .path = try allocator.dupe(u8, "/profile"),
-        .handler = @import("routes/profile/index.zig").get,
-    });
-    try routes.append(Route{
-        .module_name = try allocator.dupe(u8, "about"),
-        .method = .get,
-        .path = try allocator.dupe(u8, "/about"),
-        .handler = @import("routes/about.zig").get,
-    });
-    try routes.append(Route{
-        .module_name = try allocator.dupe(u8, "login"),
-        .method = .get,
-        .path = try allocator.dupe(u8, "/login"),
-        .handler = @import("routes/login.zig").get,
-    });
-    try routes.append(Route{
-        .module_name = try allocator.dupe(u8, "login"),
-        .method = .post,
-        .path = try allocator.dupe(u8, "/login"),
-        .handler = @import("routes/login.zig").post,
-    });
-    try routes.append(Route{
-        .module_name = try allocator.dupe(u8, "logout"),
-        .method = .get,
-        .path = try allocator.dupe(u8, "/logout"),
-        .handler = @import("routes/logout.zig").get,
     });
     return routes.toOwnedSlice();
 }
@@ -108,12 +108,28 @@ pub fn getTemplates(allocator: std.mem.Allocator) ![]const Template {
         .buffer = @embedFile("routes/layout.zmx"),
     });
     try templates.append(Template{
-        .name = try allocator.dupe(u8, "login"),
-        .buffer = @embedFile("routes/login.zmx"),
+        .name = try allocator.dupe(u8, "demos/login"),
+        .buffer = @embedFile("routes/demos/login.zmx"),
     });
     try templates.append(Template{
-        .name = try allocator.dupe(u8, "about"),
-        .buffer = @embedFile("routes/about.zmx"),
+        .name = try allocator.dupe(u8, "demos/conditionals/index"),
+        .buffer = @embedFile("routes/demos/conditionals/index.zmx"),
+    });
+    try templates.append(Template{
+        .name = try allocator.dupe(u8, "demos/components/index"),
+        .buffer = @embedFile("routes/demos/components/index.zmx"),
+    });
+    try templates.append(Template{
+        .name = try allocator.dupe(u8, "demos/profile/layout"),
+        .buffer = @embedFile("routes/demos/profile/layout.zmx"),
+    });
+    try templates.append(Template{
+        .name = try allocator.dupe(u8, "demos/profile/index"),
+        .buffer = @embedFile("routes/demos/profile/index.zmx"),
+    });
+    try templates.append(Template{
+        .name = try allocator.dupe(u8, "demos/index"),
+        .buffer = @embedFile("routes/demos/index.zmx"),
     });
     try templates.append(Template{
         .name = try allocator.dupe(u8, "components/tooltip"),
@@ -138,22 +154,6 @@ pub fn getTemplates(allocator: std.mem.Allocator) ![]const Template {
     try templates.append(Template{
         .name = try allocator.dupe(u8, "components/dropdown"),
         .buffer = @embedFile("routes/components/dropdown.zmx"),
-    });
-    try templates.append(Template{
-        .name = try allocator.dupe(u8, "demo/conditionals/index"),
-        .buffer = @embedFile("routes/demo/conditionals/index.zmx"),
-    });
-    try templates.append(Template{
-        .name = try allocator.dupe(u8, "demo/components/index"),
-        .buffer = @embedFile("routes/demo/components/index.zmx"),
-    });
-    try templates.append(Template{
-        .name = try allocator.dupe(u8, "profile/layout"),
-        .buffer = @embedFile("routes/profile/layout.zmx"),
-    });
-    try templates.append(Template{
-        .name = try allocator.dupe(u8, "profile/index"),
-        .buffer = @embedFile("routes/profile/index.zmx"),
     });
     try templates.append(Template{
         .name = try allocator.dupe(u8, "index"),

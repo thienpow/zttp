@@ -1,10 +1,10 @@
-// src/zttp.zig
 const std = @import("std");
 
 pub const Middleware = @import("middleware/mod.zig");
 pub const Request = @import("request.zig").Request;
 pub const Response = @import("response.zig").Response;
 pub const Context = @import("context.zig").Context;
+pub const WebSocket = @import("websocket.zig").WebSocket;
 
 const Server = @import("server.zig").Server;
 const ThreadPool = @import("pool.zig").ThreadPool;
@@ -14,6 +14,7 @@ const MiddlewareFn = router.MiddlewareFn;
 const HandlerFn = router.HandlerFn;
 const NextFn = router.NextFn;
 const Router = router.Router;
+pub const WebSocketHandlerFn = router.WebSocketHandlerFn;
 
 const cache = @import("template/cache.zig");
 
@@ -40,7 +41,8 @@ pub const Route = struct {
     module_name: []const u8,
     method: HttpMethod,
     path: []const u8,
-    handler: HandlerFn,
+    handler: ?HandlerFn = null,
+    ws_handler: ?WebSocketHandlerFn = null,
 };
 
 pub const Template = struct {
@@ -63,7 +65,7 @@ pub fn createServer(
     };
 
     var pool = try alloc.create(ThreadPool);
-    pool.* = try ThreadPool.init(parent_allocator, pool_options); // Use parent_allocator
+    pool.* = try ThreadPool.init(parent_allocator, pool_options);
     errdefer {
         pool.deinit();
         alloc.destroy(pool);
@@ -72,7 +74,7 @@ pub fn createServer(
     try pool.startWorkers(options.min_threads);
 
     var server = try alloc.create(Server);
-    server.* = Server.init(parent_allocator, options.port, pool); // Use parent_allocator
+    server.* = Server.init(parent_allocator, options.port, pool);
     errdefer {
         server.deinit();
         alloc.destroy(server);
@@ -115,7 +117,7 @@ pub const ServerBundle = struct {
     }
 
     pub fn route(self: *ServerBundle, method: HttpMethod, path: []const u8, handler: HandlerFn) !void {
-        try self.server.route("", method, path, handler); // Empty module_name as per router.zig
+        try self.server.route("", method, path, handler, null);
     }
 
     pub fn use(self: *ServerBundle, middleware: MiddlewareFn) !void {
@@ -129,7 +131,7 @@ pub const ServerBundle = struct {
         }
 
         for (routes) |r| {
-            try self.server.route(r.module_name, r.method, r.path, r.handler);
+            try self.server.route(r.module_name, r.method, r.path, r.handler, r.ws_handler);
         }
     }
 
@@ -140,7 +142,6 @@ pub const ServerBundle = struct {
             std.log.warn("No templates loaded", .{});
         }
 
-        // Initialize the template cache with capacity for all templates
         try cache.initTemplateCache(self.arena.allocator(), @intCast(templates.len));
 
         for (templates) |t| {

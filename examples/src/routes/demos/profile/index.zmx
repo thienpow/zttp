@@ -1,4 +1,4 @@
-#extends "profile/layout"
+#extends "demos/profile/layout"
 
 #block profile_header
      <h1>Welcome to your Profile, {{ profile_user // "User" }}!</h1>

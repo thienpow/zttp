@@ -103,6 +103,17 @@ pub const Request = struct {
         }
         return false;
     }
+
+    /// Checks if the request is a WebSocket upgrade request.
+    pub fn isWebSocketUpgrade(self: *const Request) bool {
+        if (self.method != .get) return false;
+        if (!std.mem.eql(u8, self.version, "HTTP/1.1")) return false;
+        if (!std.ascii.eqlIgnoreCase(self.headers.get("Upgrade") orelse "", "websocket")) return false;
+        if (!std.ascii.eqlIgnoreCase(self.headers.get("Connection") orelse "", "Upgrade")) return false;
+        if (!std.mem.eql(u8, self.headers.get("Sec-WebSocket-Version") orelse "", "13")) return false;
+        if (self.headers.get("Sec-WebSocket-Key") == null) return false;
+        return true;
+    }
 };
 
 /// Enum for supported content types.

@@ -1,4 +1,3 @@
-// src/server.zig
 const std = @import("std");
 const Context = @import("context.zig").Context;
 const Request = @import("request.zig").Request;
@@ -11,6 +10,7 @@ const NextFn = @import("router.zig").NextFn;
 const Router = @import("router.zig").Router;
 const HttpMethod = @import("zttp.zig").HttpMethod;
 const Template = @import("template/main.zig");
+const WebSocket = @import("websocket.zig").WebSocket;
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
@@ -19,6 +19,7 @@ pub const Server = struct {
     running: bool,
     router: Router,
     pool: *ThreadPool,
+    websockets: std.ArrayList(WebSocket),
 
     pub fn init(allocator: std.mem.Allocator, port: u16, pool: *ThreadPool) Server {
         return .{
@@ -28,10 +29,16 @@ pub const Server = struct {
             .running = false,
             .router = Router.init(allocator),
             .pool = pool,
+            .websockets = std.ArrayList(WebSocket).init(allocator),
         };
     }
 
     pub fn deinit(self: *Server) void {
+        // Close all WebSocket connections
+        for (self.websockets.items) |*ws| {
+            ws.close();
+        }
+        self.websockets.deinit();
         if (self.listener) |*listener| {
             listener.deinit();
         }
@@ -72,7 +79,6 @@ pub const Server = struct {
                 null,
             );
             _ = task_id;
-            //std.log.debug("Scheduled connection handling task: {d}", .{task_id});
         }
     }
 
@@ -107,6 +113,58 @@ pub const Server = struct {
         var res = Response.init(alloc);
         var ctx = Context.init(alloc);
 
+        // Check for WebSocket upgrade
+        if (req.isWebSocketUpgrade()) {
+            // Perform WebSocket handshake
+            const ws_key = req.headers.get("Sec-WebSocket-Key") orelse {
+                sendError(task.conn.stream, alloc, .bad_request, "Missing Sec-WebSocket-Key");
+                result.success = false;
+                return;
+            };
+            res.setWebSocketHandshake(ws_key) catch |err| {
+                std.log.err("Failed to set WebSocket handshake: {}", .{err});
+                sendError(task.conn.stream, alloc, .internal_server_error, "Handshake Error");
+                result.success = false;
+                return;
+            };
+            res.send(task.conn.stream, &req) catch |err| {
+                std.log.err("Failed to send WebSocket handshake: {}", .{err});
+                result.success = false;
+                return;
+            };
+
+            // Initialize WebSocket and add to server's list
+            var ws = WebSocket.init(task.conn.stream.handle, alloc);
+            task.server.websockets.append(ws) catch |err| {
+                std.log.err("Failed to append WebSocket to list: {}", .{err});
+                ws.close();
+                result.success = false;
+                return;
+            };
+
+            // Schedule WebSocket handling
+            const ws_task_id = task.server.pool.schedule(
+                handleWebSocket,
+                WebSocketTask{ .server = task.server, .ws = &task.server.websockets.items[task.server.websockets.items.len - 1] },
+                null,
+                5,
+                null,
+                0,
+                0,
+                null,
+                null,
+            ) catch |err| {
+                std.log.err("Failed to schedule WebSocket task: {}", .{err});
+                ws.close();
+                result.success = false;
+                return;
+            };
+            _ = ws_task_id;
+            result.success = true;
+            return;
+        }
+
+        // Existing HTTP handling
         res.setHeader("Server", "zig-http/0.1") catch {
             sendError(task.conn.stream, alloc, .internal_server_error, "Server Error");
             result.success = false;
@@ -122,7 +180,6 @@ pub const Server = struct {
 
         const middlewares = task.server.router.getMiddlewares();
         if (middlewares.len > 0) {
-            // Store MiddlewareContext in ctx
             const middleware_context = MiddlewareContext{
                 .middlewares = middlewares,
                 .index = 0,
@@ -151,7 +208,6 @@ pub const Server = struct {
             callNext(&req, &res, &ctx);
         }
 
-        // Skip template rendering and handler if response is already set
         if (res.body != null) {
             res.send(task.conn.stream, &req) catch |err| {
                 std.log.err("Failed to send response: {}", .{err});
@@ -162,13 +218,11 @@ pub const Server = struct {
             return;
         }
 
-        // Proceed with handler if no middleware set the response
         if (middlewares.len == 0) {
             const handler = task.server.router.getHandler(req.method, req.path, &ctx) orelse notFound;
             handler(&req, &res, &ctx);
         }
 
-        // Try to render template only if response is not set
         const rendered = Template.renderTemplate(res.arena.allocator(), req.path, &ctx) catch |err| {
             std.log.err("Template error: {}", .{err});
             res.setBody("Internal Server Error") catch return;
@@ -187,6 +241,49 @@ pub const Server = struct {
             return;
         };
 
+        result.success = true;
+    }
+
+    const WebSocketTask = struct {
+        server: *Server,
+        ws: *WebSocket,
+    };
+
+    fn handleWebSocket(task: WebSocketTask, result: *ThreadPool.TaskResult) void {
+        defer task.ws.close();
+        var buffer: [4096]u8 = undefined;
+
+        while (task.ws.is_open) {
+            const len = std.posix.recv(task.ws.socket, &buffer, 0) catch |err| {
+                std.log.err("WebSocket read error: {}", .{err});
+                break;
+            };
+            if (len == 0) break; // Connection closed
+
+            // Basic frame parsing (text frames only)
+            if (len >= 2 and buffer[0] & 0x80 == 0x80 and buffer[0] & 0x0F == 0x1) {
+                const payload_len = buffer[1] & 0x7F;
+                if (payload_len + 2 <= len) {
+                    const payload = buffer[2 .. 2 + payload_len];
+                    // Echo back the message (for testing)
+                    task.ws.sendMessage(payload) catch |err| {
+                        std.log.err("WebSocket send error: {}", .{err});
+                        break;
+                    };
+                }
+            } else if (buffer[0] & 0x80 == 0x80 and buffer[0] & 0x0F == 0x8) {
+                // Close frame received
+                break;
+            }
+        }
+
+        // Remove WebSocket from server's list
+        for (task.server.websockets.items, 0..) |ws, i| {
+            if (ws.socket == task.ws.socket) {
+                _ = task.server.websockets.swapRemove(i);
+                break;
+            }
+        }
         result.success = true;
     }
 

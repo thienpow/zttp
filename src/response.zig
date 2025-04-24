@@ -83,7 +83,7 @@ pub const Response = struct {
             try buffer.writer().print("; Path={s}", .{path});
         }
         if (options.secure) {
-            try buffer.writer().writeAll("; Secure");
+            try buffer.writer().print("; Secure");
         }
         if (options.same_site) |ss| {
             try buffer.writer().print("; SameSite={s}", .{ss});
@@ -100,6 +100,27 @@ pub const Response = struct {
         self.status = status;
         try self.setHeader("Location", location);
         try self.setBody("");
+    }
+
+    /// Sets the response for a WebSocket handshake (101 Switching Protocols).
+    /// Requires Sec-WebSocket-Key from the request.
+    pub fn setWebSocketHandshake(self: *Response, ws_key: []const u8) !void {
+        self.status = .switching_protocols;
+
+        // Compute Sec-WebSocket-Accept
+        const magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        var concat_buf: [128]u8 = undefined;
+        const concat = try std.fmt.bufPrint(&concat_buf, "{s}{s}", .{ ws_key, magic });
+        var sha1_hash: [20]u8 = undefined;
+        std.crypto.hash.Sha1.hash(concat, &sha1_hash, .{});
+        var accept_buf: [32]u8 = undefined;
+        const accept_key = std.base64.standard.Encoder.encode(&accept_buf, &sha1_hash); // Removed try
+
+        // Set required headers
+        try self.setHeader("Upgrade", "websocket");
+        try self.setHeader("Connection", "Upgrade");
+        try self.setHeader("Sec-WebSocket-Accept", accept_key);
+        try self.setBody(""); // No body for handshake
     }
 
     /// Sends the response over the given stream.
@@ -130,6 +151,7 @@ pub const CookieOptions = struct {
 /// HTTP status codes.
 pub const StatusCode = enum(u16) {
     unknown = 0,
+    switching_protocols = 101, // Added for WebSocket
     ok = 200,
     created = 201,
     accepted = 202,
@@ -149,6 +171,7 @@ pub const StatusCode = enum(u16) {
     pub fn reason(self: StatusCode) []const u8 {
         return switch (self) {
             .unknown => "Unknown",
+            .switching_protocols => "Switching Protocols", // Added for WebSocket
             .ok => "OK",
             .created => "Created",
             .accepted => "Accepted",

@@ -15,12 +15,6 @@ pub fn getRoutes(allocator: std.mem.Allocator) ![]const Route {
         routes.deinit();
     }
     try routes.append(Route{
-        .module_name = try allocator.dupe(u8, "websocket"),
-        .method = .get,
-        .path = try allocator.dupe(u8, "/ws"),
-        .ws_handler = @import("routes/ws.zig").ws,
-    });
-    try routes.append(Route{
         .module_name = try allocator.dupe(u8, "index"),
         .method = .get,
         .path = try allocator.dupe(u8, "/"),
@@ -31,6 +25,18 @@ pub fn getRoutes(allocator: std.mem.Allocator) ![]const Route {
         .method = .get,
         .path = try allocator.dupe(u8, "/demos"),
         .handler = @import("routes/demos/index.zig").get,
+    });
+    try routes.append(Route{
+        .module_name = try allocator.dupe(u8, "websocket"),
+        .method = .get,
+        .path = try allocator.dupe(u8, "/demos/websocket/hello"),
+        .ws_handler = @import("routes/demos/websocket/hello.zig").ws,
+    });
+    try routes.append(Route{
+        .module_name = try allocator.dupe(u8, "websocket"),
+        .method = .get,
+        .path = try allocator.dupe(u8, "/demos/websocket/chat"),
+        .ws_handler = @import("routes/demos/websocket/chat/index.zig").ws,
     });
     try routes.append(Route{
         .module_name = try allocator.dupe(u8, "index"),
@@ -106,6 +112,10 @@ pub fn getTemplates(allocator: std.mem.Allocator) ![]const Template {
     try templates.append(Template{
         .name = try allocator.dupe(u8, "layout"),
         .buffer = @embedFile("routes/layout.zmx"),
+    });
+    try templates.append(Template{
+        .name = try allocator.dupe(u8, "demos/websocket/chat/index"),
+        .buffer = @embedFile("routes/demos/websocket/chat/index.zmx"),
     });
     try templates.append(Template{
         .name = try allocator.dupe(u8, "demos/login"),

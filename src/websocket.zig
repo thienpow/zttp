@@ -1,7 +1,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Request = @import("request.zig").Request;
-const Response = @import("response.zig").Response;
+const Context = @import("context.zig").Context;
+const WebSocketHandlerFn = @import("router.zig").WebSocketHandlerFn;
+const ThreadPool = @import("pool.zig").ThreadPool;
+const Server = @import("server.zig").Server;
 
 pub const WebSocket = struct {
     socket: std.posix.fd_t,
@@ -22,31 +24,6 @@ pub const WebSocket = struct {
             return 0;
         }
         return bytes_read;
-    }
-
-    pub fn handleHandshake(req: *const Request, res: *Response) !bool {
-        // Check WebSocket upgrade headers
-        if (!std.mem.eql(u8, req.headers.get("Upgrade") orelse "", "websocket")) return false;
-        if (!std.mem.eql(u8, req.headers.get("Connection") orelse "", "Upgrade")) return false;
-        if (!std.mem.eql(u8, req.headers.get("Sec-WebSocket-Version") orelse "", "13")) return false;
-
-        const key = req.headers.get("Sec-WebSocket-Key") orelse return error.InvalidWebSocketKey;
-
-        // Compute Sec-WebSocket-Accept
-        const magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-        var concat_buf: [128]u8 = undefined;
-        const concat = try std.fmt.bufPrint(&concat_buf, "{s}{s}", .{ key, magic });
-        var sha1_hash: [20]u8 = undefined;
-        std.crypto.hash.Sha1.hash(concat, &sha1_hash, .{});
-        var accept_buf: [32]u8 = undefined;
-        const accept_key = std.base64.standard.Encoder.encode(&accept_buf, &sha1_hash);
-
-        // Set response headers
-        res.status = 101;
-        try res.headers.put("Upgrade", "websocket");
-        try res.headers.put("Connection", "Upgrade");
-        try res.headers.put("Sec-WebSocket-Accept", accept_key);
-        return true;
     }
 
     pub fn sendFrame(self: *WebSocket, opcode: u8, payload: []const u8) !void {
@@ -104,3 +81,214 @@ pub const WebSocket = struct {
         }
     }
 };
+
+pub const WebSocketTask = struct {
+    server: *Server,
+    ws: *WebSocket,
+    ctx: *Context,
+    handler: WebSocketHandlerFn,
+};
+
+pub fn handleWebSocket(task_ptr: *WebSocketTask, result: *ThreadPool.TaskResult) void {
+    const task = task_ptr.*;
+    const alloc = task.server.allocator;
+
+    var ctx_deinit_done = false;
+    defer if (!ctx_deinit_done) task.ctx.deinit();
+
+    var ws_close_done = false;
+    defer if (!ws_close_done) task.ws.close();
+
+    defer alloc.destroy(task_ptr);
+
+    defer {
+        var found = false;
+        for (task.server.websockets.items, 0..) |*server_ws, i| {
+            if (server_ws.socket == task.ws.socket) {
+                _ = task.server.websockets.swapRemove(i);
+                found = true;
+                std.log.info("Removed WebSocket (FD: {d}) from server list.", .{task.ws.socket});
+                break;
+            }
+        }
+        if (!found) {
+            std.log.warn("WebSocket (FD: {d}) already removed from server list?", .{task.ws.socket});
+        }
+
+        ctx_deinit_done = true;
+        ws_close_done = true;
+    }
+
+    std.log.info("WebSocket handler started for socket FD: {d}", .{task.ws.socket});
+
+    var read_buffer: [4096]u8 = undefined;
+
+    while (task.ws.is_open) {
+        const header_bytes_read = task.ws.readBlocking(read_buffer[0..2]) catch |err| {
+            std.log.info("WebSocket read error (header): {any}. Closing connection FD: {d}", .{ err, task.ws.socket });
+            break;
+        };
+
+        if (header_bytes_read == 0) {
+            std.log.info("WebSocket connection closed by peer (FD: {d}).", .{task.ws.socket});
+            break;
+        }
+        if (header_bytes_read < 2) {
+            std.log.warn("Incomplete WebSocket frame header received ({d} bytes). Closing FD: {d}", .{ header_bytes_read, task.ws.socket });
+            break;
+        }
+
+        const fin_bit = (read_buffer[0] >> 7) & 1;
+        const rsv_bits = (read_buffer[0] >> 4) & 7;
+        const opcode = read_buffer[0] & 0x0F;
+        const mask_bit = (read_buffer[1] >> 7) & 1;
+        const payload_len_short = read_buffer[1] & 0x7F;
+
+        if (rsv_bits != 0) {
+            std.log.warn("WebSocket frame received with non-zero RSV bits ({b}). Closing FD: {d}", .{ rsv_bits, task.ws.socket });
+            break;
+        }
+        if (mask_bit == 0) {
+            std.log.warn("WebSocket frame received from client without mask bit set. Closing FD: {d}", .{task.ws.socket});
+            break;
+        }
+
+        var payload_len: u64 = 0;
+        var mask_key: [4]u8 = undefined;
+        var current_read_offset: usize = 2;
+
+        if (payload_len_short <= 125) {
+            payload_len = payload_len_short;
+        } else if (payload_len_short == 126) {
+            var len_buffer: [2]u8 = undefined;
+            if (task.ws.readBlocking(&len_buffer) catch |err| {
+                std.log.warn("WebSocket read error (16-bit length): {any}. Closing FD: {d}", .{ err, task.ws.socket });
+                break;
+            } != 2) {
+                std.log.warn("Incomplete WebSocket frame (16-bit length). Closing FD: {d}", .{task.ws.socket});
+                break;
+            }
+            payload_len = std.mem.readInt(u16, &len_buffer, .big);
+            current_read_offset += 2;
+        } else {
+            var len_buffer: [8]u8 = undefined;
+            if (task.ws.readBlocking(&len_buffer) catch |err| {
+                std.log.warn("WebSocket read error (64-bit length): {any}. Closing FD: {d}", .{ err, task.ws.socket });
+                break;
+            } != 8) {
+                std.log.warn("Incomplete WebSocket frame (64-bit length). Closing FD: {d}", .{task.ws.socket});
+                break;
+            }
+            payload_len = std.mem.readInt(u64, &len_buffer, .big);
+            current_read_offset += 8;
+        }
+
+        if (task.ws.readBlocking(read_buffer[current_read_offset .. current_read_offset + 4]) catch |err| {
+            std.log.warn("WebSocket read error (mask key): {any}. Closing FD: {d}", .{ err, task.ws.socket });
+            break;
+        } != 4) {
+            std.log.warn("Incomplete WebSocket frame (mask key). Closing FD: {d}", .{task.ws.socket});
+            break;
+        }
+        @memcpy(&mask_key, read_buffer[current_read_offset .. current_read_offset + 4]);
+        current_read_offset += 4;
+
+        if (opcode >= 0x8) {
+            if (payload_len > 125) {
+                std.log.warn("Control frame received with payload > 125 bytes. Closing FD: {d}", .{task.ws.socket});
+                break;
+            }
+            if (fin_bit == 0) {
+                std.log.warn("Control frame received fragmented (FIN=0). Closing FD: {d}", .{task.ws.socket});
+                break;
+            }
+
+            const control_payload = alloc.alloc(u8, @intCast(payload_len)) catch {
+                std.log.err("Failed to allocate buffer for control frame payload. Closing FD: {d}", .{task.ws.socket});
+                break;
+            };
+            defer alloc.free(control_payload);
+
+            if (task.ws.readBlocking(control_payload) catch |err| {
+                std.log.warn("WebSocket read error (control payload): {any}. Closing FD: {d}", .{ err, task.ws.socket });
+                break;
+            } != control_payload.len) {
+                std.log.warn("Incomplete WebSocket control frame payload. Closing FD: {d}", .{task.ws.socket});
+                break;
+            }
+            for (control_payload, 0..) |*byte, j| {
+                byte.* ^= mask_key[j % 4];
+            }
+
+            switch (opcode) {
+                0x8 => {
+                    std.log.info("WebSocket Close frame received. Closing connection FD: {d}", .{task.ws.socket});
+                    task.ws.close();
+                    break;
+                },
+                0x9 => {
+                    std.log.debug("WebSocket Ping frame received. Sending Pong. FD: {d}", .{task.ws.socket});
+                    task.ws.sendFrame(0xA, control_payload) catch |err| {
+                        std.log.err("Failed to send WebSocket Pong frame: {any}. Closing FD: {d}", .{ err, task.ws.socket });
+                        break;
+                    };
+                },
+                0xA => {
+                    std.log.debug("WebSocket Pong frame received. FD: {d}", .{task.ws.socket});
+                },
+                else => {
+                    std.log.warn("Unknown control frame opcode received: {x}. Closing FD: {d}", .{ opcode, task.ws.socket });
+                    break;
+                },
+            }
+            if (!task.ws.is_open) break;
+            continue;
+        }
+
+        if (opcode != 0x1 and opcode != 0x2) {
+            std.log.warn("Unsupported data frame opcode received: {x}. Closing FD: {d}", .{ opcode, task.ws.socket });
+            break;
+        }
+
+        const max_payload: u64 = 1024 * 1024;
+        if (payload_len > max_payload) {
+            std.log.warn("WebSocket payload too large ({d} bytes). Closing FD: {d}", .{ payload_len, task.ws.socket });
+            break;
+        }
+        if (payload_len == 0) {
+            if (opcode == 0x1) {
+                task.handler(task.ws, "", task.ctx);
+            } else {
+                std.log.debug("Received empty binary frame. Ignoring. FD: {d}", .{task.ws.socket});
+            }
+            continue;
+        }
+
+        const payload_buffer = alloc.alloc(u8, @intCast(payload_len)) catch |err| {
+            std.log.err("Failed to allocate buffer for WebSocket payload ({d} bytes): {any}. Closing FD: {d}", .{ payload_len, err, task.ws.socket });
+            break;
+        };
+        defer alloc.free(payload_buffer);
+
+        if (task.ws.readBlocking(payload_buffer) catch |err| {
+            std.log.warn("WebSocket read error (payload): {any}. Closing FD: {d}", .{ err, task.ws.socket });
+            break;
+        } != payload_buffer.len) {
+            std.log.warn("Incomplete WebSocket payload received. Closing FD: {d}", .{task.ws.socket});
+            break;
+        }
+
+        for (payload_buffer, 0..) |*byte, j| {
+            byte.* ^= mask_key[j % 4];
+        }
+
+        if (opcode == 0x1) {
+            task.handler(task.ws, payload_buffer, task.ctx);
+        } else {
+            std.log.debug("Received binary frame ({d} bytes). Ignoring. FD: {d}", .{ payload_buffer.len, task.ws.socket });
+        }
+    }
+
+    std.log.info("WebSocket handler finished for FD: {d}", .{task.ws.socket});
+    result.success = true;
+}

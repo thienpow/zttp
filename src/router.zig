@@ -8,7 +8,7 @@ const HttpMethod = @import("zttp.zig").HttpMethod;
 pub const HandlerFn = *const fn (*Request, *Response, *Context) void;
 pub const MiddlewareFn = *const fn (*Request, *Response, *Context, NextFn) void;
 pub const NextFn = *const fn (*Request, *Response, *Context) void;
-pub const WebSocketHandlerFn = *const fn (ws: *WebSocket, data: []const u8, ctx: *const Context) void;
+pub const WebSocketHandlerFn = *const fn (ws: *WebSocket, data: []const u8, ctx: *Context) void;
 
 pub const Router = struct {
     routes: std.ArrayList(Route),
@@ -85,103 +85,112 @@ pub const Router = struct {
         try self.middlewares.append(middleware);
     }
 
-    pub fn getHandler(self: *Router, method: HttpMethod, path: []const u8, ctx: *Context) ?HandlerFn {
-        for (self.routes.items) |route| {
-            if (route.method != method) continue;
+    fn matchRoute(route: Route, method: HttpMethod, path: []const u8, ctx: *Context) ?struct { handler: ?HandlerFn, ws_handler: ?WebSocketHandlerFn } {
+        if (route.method != method) return null;
 
-            if (route.is_wildcard) {
-                // Match prefix up to '/*'
-                const prefix = route.path[0 .. route.path.len - 2]; // Remove '/*'
-                if (std.mem.startsWith(u8, path, prefix)) {
-                    // Trim leading '/' from suffix, if present
-                    var suffix = path[prefix.len..];
-                    if (suffix.len > 0 and suffix[0] == '/') {
-                        suffix = suffix[1..];
-                    }
-                    const suffix_owned = ctx.allocator.dupe(u8, suffix) catch {
-                        std.log.err("Failed to allocate wildcard suffix", .{});
-                        continue;
-                    };
-                    ctx.set("wildcard", suffix_owned) catch {
-                        std.log.err("Failed to set wildcard", .{});
-                        ctx.allocator.free(suffix_owned);
-                        continue;
-                    };
-                    return route.handler;
+        if (route.is_wildcard) {
+            // Match prefix up to '/*'
+            const prefix = route.path[0 .. route.path.len - 2]; // Remove '/*'
+            if (std.mem.startsWith(u8, path, prefix)) {
+                // Trim leading '/' from suffix, if present
+                var suffix = path[prefix.len..];
+                if (suffix.len > 0 and suffix[0] == '/') {
+                    suffix = suffix[1..];
                 }
+                const suffix_owned = ctx.allocator.dupe(u8, suffix) catch {
+                    std.log.err("Failed to allocate wildcard suffix", .{});
+                    return null;
+                };
+                ctx.set("wildcard", suffix_owned) catch {
+                    std.log.err("Failed to set wildcard", .{});
+                    ctx.allocator.free(suffix_owned);
+                    return null;
+                };
+                return .{ .handler = route.handler, .ws_handler = route.ws_handler };
+            }
+            return null;
+        }
+
+        if (!route.is_parametrized) {
+            // Static route: exact match
+            if (std.mem.eql(u8, route.path, path)) {
+                return .{ .handler = route.handler, .ws_handler = route.ws_handler };
+            }
+            return null;
+        }
+
+        // Parameterized route: match segments
+        var route_segments = std.mem.splitScalar(u8, route.path, '/');
+        var path_segments = std.mem.splitScalar(u8, path, '/');
+        var param_index: usize = 0;
+        var match = true;
+
+        while (route_segments.next()) |route_seg| {
+            const path_seg = path_segments.next() orelse {
+                match = false;
+                break;
+            };
+
+            if (route_seg.len == 0 and path_seg.len == 0) {
                 continue;
             }
 
-            if (!route.is_parametrized) {
-                // Static route: exact match
-                if (std.mem.eql(u8, route.path, path)) {
-                    return route.handler;
-                }
-            } else {
-                // Parameterized route: match segments
-                var route_segments = std.mem.splitScalar(u8, route.path, '/');
-                var path_segments = std.mem.splitScalar(u8, path, '/');
-                var param_index: usize = 0;
-                var match = true;
-
-                while (route_segments.next()) |route_seg| {
-                    const path_seg = path_segments.next() orelse {
+            if (route_seg[0] == ':') {
+                if (param_index < route.param_names.len) {
+                    // Store parameter in Context
+                    const param_name = route.param_names[param_index];
+                    const param_value = ctx.allocator.dupe(u8, path_seg) catch {
+                        std.log.err("Failed to allocate param value for {s}", .{param_name});
                         match = false;
                         break;
                     };
-
-                    if (route_seg.len == 0 and path_seg.len == 0) {
-                        continue;
-                    }
-
-                    if (route_seg[0] == ':') {
-                        if (param_index < route.param_names.len) {
-                            // Store parameter in Context
-                            const param_name = route.param_names[param_index];
-                            const param_value = ctx.allocator.dupe(u8, path_seg) catch {
-                                std.log.err("Failed to allocate param value for {s}", .{param_name});
-                                match = false;
-                                break;
-                            };
-                            ctx.set(param_name, param_value) catch {
-                                std.log.err("Failed to set param {s}", .{param_name});
-                                ctx.allocator.free(param_value);
-                                match = false;
-                                break;
-                            };
-                            param_index += 1;
-                        } else {
-                            match = false;
-                            break;
-                        }
-                    } else if (!std.mem.eql(u8, route_seg, path_seg)) {
+                    ctx.set(param_name, param_value) catch {
+                        std.log.err("Failed to set param {s}", .{param_name});
+                        ctx.allocator.free(param_value);
                         match = false;
                         break;
-                    }
-                }
-
-                // Ensure no extra path segments
-                if (path_segments.next() != null) {
+                    };
+                    param_index += 1;
+                } else {
                     match = false;
+                    break;
                 }
+            } else if (!std.mem.eql(u8, route_seg, path_seg)) {
+                match = false;
+                break;
+            }
+        }
 
-                // Check if all parameters were set
-                if (match and param_index != route.param_names.len) {
-                    match = false;
-                }
+        // Ensure no extra path segments
+        if (path_segments.next() != null) {
+            match = false;
+        }
 
-                if (match) {
-                    return route.handler;
+        // Check if all parameters were set
+        if (match and param_index != route.param_names.len) {
+            match = false;
+        }
+
+        if (match) {
+            return .{ .handler = route.handler, .ws_handler = route.ws_handler };
+        }
+
+        // Clear any parameters if no match
+        for (0..param_index) |i| {
+            if (i < route.param_names.len) {
+                if (ctx.get(route.param_names[i])) |val| {
+                    ctx.allocator.free(val);
+                    _ = ctx.data.remove(route.param_names[i]);
                 }
-                // Clear any parameters if no match
-                for (0..param_index) |i| {
-                    if (i < route.param_names.len) {
-                        if (ctx.get(route.param_names[i])) |val| {
-                            ctx.allocator.free(val);
-                            _ = ctx.data.remove(route.param_names[i]);
-                        }
-                    }
-                }
+            }
+        }
+        return null;
+    }
+
+    pub fn getHandler(self: *Router, method: HttpMethod, path: []const u8, ctx: *Context) ?HandlerFn {
+        for (self.routes.items) |route| {
+            if (matchRoute(route, method, path, ctx)) |result| {
+                return result.handler;
             }
         }
         return null;
@@ -189,93 +198,8 @@ pub const Router = struct {
 
     pub fn getWebSocketHandler(self: *Router, method: HttpMethod, path: []const u8, ctx: *Context) ?WebSocketHandlerFn {
         for (self.routes.items) |route| {
-            if (route.method != method) continue;
-
-            if (route.is_wildcard) {
-                const prefix = route.path[0 .. route.path.len - 2];
-                if (std.mem.startsWith(u8, path, prefix)) {
-                    var suffix = path[prefix.len..];
-                    if (suffix.len > 0 and suffix[0] == '/') {
-                        suffix = suffix[1..];
-                    }
-                    const suffix_owned = ctx.allocator.dupe(u8, suffix) catch {
-                        std.log.err("Failed to allocate wildcard suffix", .{});
-                        continue;
-                    };
-                    ctx.set("wildcard", suffix_owned) catch {
-                        std.log.err("Failed to set wildcard", .{});
-                        ctx.allocator.free(suffix_owned);
-                        continue;
-                    };
-                    return route.ws_handler;
-                }
-                continue;
-            }
-
-            if (!route.is_parametrized) {
-                if (std.mem.eql(u8, route.path, path)) {
-                    return route.ws_handler;
-                }
-            } else {
-                var route_segments = std.mem.splitScalar(u8, route.path, '/');
-                var path_segments = std.mem.splitScalar(u8, path, '/');
-                var param_index: usize = 0;
-                var match = true;
-
-                while (route_segments.next()) |route_seg| {
-                    const path_seg = path_segments.next() orelse {
-                        match = false;
-                        break;
-                    };
-
-                    if (route_seg.len == 0 and path_seg.len == 0) {
-                        continue;
-                    }
-
-                    if (route_seg[0] == ':') {
-                        if (param_index < route.param_names.len) {
-                            const param_name = route.param_names[param_index];
-                            const param_value = ctx.allocator.dupe(u8, path_seg) catch {
-                                std.log.err("Failed to allocate param value for {s}", .{param_name});
-                                match = false;
-                                break;
-                            };
-                            ctx.set(param_name, param_value) catch {
-                                std.log.err("Failed to set param {s}", .{param_name});
-                                ctx.allocator.free(param_value);
-                                match = false;
-                                break;
-                            };
-                            param_index += 1;
-                        } else {
-                            match = false;
-                            break;
-                        }
-                    } else if (!std.mem.eql(u8, route_seg, path_seg)) {
-                        match = false;
-                        break;
-                    }
-                }
-
-                if (path_segments.next() != null) {
-                    match = false;
-                }
-
-                if (match and param_index != route.param_names.len) {
-                    match = false;
-                }
-
-                if (match) {
-                    return route.ws_handler;
-                }
-                for (0..param_index) |i| {
-                    if (i < route.param_names.len) {
-                        if (ctx.get(route.param_names[i])) |val| {
-                            ctx.allocator.free(val);
-                            _ = ctx.data.remove(route.param_names[i]);
-                        }
-                    }
-                }
+            if (matchRoute(route, method, path, ctx)) |result| {
+                return result.ws_handler;
             }
         }
         return null;

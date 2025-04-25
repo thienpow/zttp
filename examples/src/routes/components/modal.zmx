@@ -1,2 +1,2 @@
-#css "/static/components/modal.css"
-#js "/static/components/modal.js"
+#css "/components/modal.css"
+#js "/components/modal.js"

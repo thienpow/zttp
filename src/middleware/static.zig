@@ -1,4 +1,3 @@
-// src/middleware/static.zig
 const std = @import("std");
 pub const Request = @import("../request.zig").Request;
 pub const Response = @import("../response.zig").Response;
@@ -61,19 +60,20 @@ fn getContentType(path: []const u8) []const u8 {
     if (std.mem.eql(u8, ext, ".7z")) return "application/x-7z-compressed";
     if (std.mem.eql(u8, ext, ".rar")) return "application/x-rar-compressed";
     if (std.mem.eql(u8, ext, ".yaml") or std.mem.eql(u8, ext, ".yml")) return "application/x-yaml";
+    if (std.mem.eql(u8, ext, ".webmanifest")) return "application/manifest+json";
     return "application/octet-stream";
 }
 
 // Middleware handler for static files
 pub fn static(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Request, *Response, *Context) void) void {
-    // Check if the request path starts with /static/
-    if (!std.mem.startsWith(u8, req.path, "/static/")) {
+    // Remove leading slash from path
+    const relative_path = if (std.mem.startsWith(u8, req.path, "/")) req.path[1..] else req.path;
+
+    // Skip if path is empty or likely a dynamic route (no extension)
+    if (relative_path.len == 0 or !std.mem.containsAtLeast(u8, relative_path, 1, ".")) {
         next(req, res, ctx);
         return;
     }
-
-    // Get the relative path by removing /static/ prefix
-    const relative_path = req.path[8..]; // Skip "/static/"
 
     // Prevent directory traversal
     if (std.mem.indexOf(u8, relative_path, "..") != null) {
@@ -99,14 +99,14 @@ pub fn static(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Re
     // Open and read the file
     const file = std.fs.cwd().openFile(file_path, .{}) catch |err| {
         if (err == error.FileNotFound) {
-            res.status = @enumFromInt(404); // Not Found
-            res.body = "Not Found";
+            next(req, res, ctx); // Pass to next handler
+            return;
         } else {
             std.log.warn("Failed to open file: {}", .{err});
             res.status = @enumFromInt(500); // Internal Server Error
             res.body = "Internal Server Error";
+            return;
         }
-        return;
     };
     defer file.close();
 
@@ -118,7 +118,7 @@ pub fn static(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Re
         return;
     };
 
-    // Allocate memory for file content using the response's allocator (or context allocator)
+    // Allocate memory for file content using the response's allocator
     const file_content = res.allocator.alloc(u8, file_size) catch |err| {
         std.log.warn("Failed to allocate memory: {}", .{err});
         res.status = @enumFromInt(500); // Internal Server Error

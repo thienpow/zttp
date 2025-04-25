@@ -159,7 +159,7 @@
       htmx.config.scrollIntoViewOnBoost = false;
     </script>
     <!-- Include global components JS if you have one -->
-    <script src="/static/components/global.js"></script>
+    <script src="/components/global.js"></script>
 
 </head>
 <body> <!-- Consider id="page-body" if needed -->

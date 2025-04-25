@@ -12,7 +12,7 @@
 
     <h1>Component Showcase</h1>
     <p>Demonstrating various UI components available in this example project.</p>
-    <p><em>Note: Component JavaScript logic is primarily handled by <code>/static/components/global.js</code> which delegates to functions defined in individual component JS files using the <code>#js</code> directives above.</em></p>
+    <p><em>Note: Component JavaScript logic is primarily handled by <code>/components/global.js</code> which delegates to functions defined in individual component JS files using the <code>#js</code> directives above.</em></p>
 
     <!-- Buttons -->
     <div class="component-example">

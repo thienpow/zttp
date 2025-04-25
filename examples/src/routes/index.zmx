@@ -2,7 +2,7 @@
 
 #block content
     <title>ZTTP Showcase - Home</title>
-    <link rel="stylesheet" href="/static/highlight.css">
+    <link rel="stylesheet" href="/highlight.css">
 
     <style>
         /* --- Existing Hero, Features, Next Steps styles --- */

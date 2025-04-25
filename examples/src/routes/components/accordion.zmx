@@ -1,2 +1,2 @@
-#css "/static/components/accordion.css"
-#js "/static/components/accordion.js"
+#css "/components/accordion.css"
+#js "/components/accordion.js"

@@ -1,2 +1,2 @@
-#css "/static/components/button.css"
-#js "/static/components/button.js"
+#css "/components/button.css"
+#js "/components/button.js"

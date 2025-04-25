@@ -1,2 +1,2 @@
-#css "/static/components/tooltip.css"
-#js "/static/components/tooltip.js"
+#css "/components/tooltip.css"
+#js "/components/tooltip.js"

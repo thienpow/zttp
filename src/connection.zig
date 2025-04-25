@@ -81,15 +81,28 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
             return;
         };
 
-        var ws_ctx = Context.init(alloc);
-        // Note: ws_ctx deinit is handled by WebSocketTask in handleWebSocket
+        // Heap-allocate the WebSocket context so it persists after this function returns
+        var ws_ctx_ptr = alloc.create(Context) catch |err| {
+            std.log.err("Failed to allocate WebSocket context: {any}", .{err});
+            ws_res.deinit();
+            result.success = false;
+            return;
+        };
+        errdefer {
+            ws_ctx_ptr.deinit();
+            alloc.destroy(ws_ctx_ptr);
+        }
 
+        ws_ctx_ptr.* = Context.init(alloc);
+
+        // Copy values from original context to WebSocket context
         var original_ctx_it = ctx.data.iterator();
         while (original_ctx_it.next()) |entry| {
             const key_copy = alloc.dupe(u8, entry.key_ptr.*) catch |err| {
                 std.log.err("Failed to copy context key for WebSocket: {any}", .{err});
                 ws_res.deinit();
-                ws_ctx.deinit();
+                ws_ctx_ptr.deinit();
+                alloc.destroy(ws_ctx_ptr);
                 result.success = false;
                 return;
             };
@@ -99,28 +112,31 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
                 std.log.err("Failed to copy context value for WebSocket: {any}", .{err});
                 alloc.free(key_copy);
                 ws_res.deinit();
-                ws_ctx.deinit();
+                ws_ctx_ptr.deinit();
+                alloc.destroy(ws_ctx_ptr);
                 result.success = false;
                 return;
             };
             errdefer alloc.free(value_copy);
 
-            ws_ctx.setOwned(key_copy, value_copy) catch |err| {
+            ws_ctx_ptr.setOwned(key_copy, value_copy) catch |err| {
                 std.log.err("Failed to set copied context for WebSocket: {any}", .{err});
                 alloc.free(key_copy);
                 alloc.free(value_copy);
                 ws_res.deinit();
-                ws_ctx.deinit();
+                ws_ctx_ptr.deinit();
+                alloc.destroy(ws_ctx_ptr);
                 result.success = false;
                 return;
             };
         }
 
-        const ws_handler = task.server.router.getWebSocketHandler(req.method, req.path, &ws_ctx) orelse {
+        const ws_handler = task.server.router.getWebSocketHandler(req.method, req.path, ws_ctx_ptr) orelse {
             std.log.warn("No WebSocket handler found for path: {s}", .{req.path});
             utils.sendError(task.conn.stream, alloc, .not_found, "No WebSocket handler found");
             ws_res.deinit();
-            ws_ctx.deinit();
+            ws_ctx_ptr.deinit();
+            alloc.destroy(ws_ctx_ptr);
             result.success = false;
             return;
         };
@@ -135,7 +151,8 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
                     std.log.err("Failed to send handler response for aborted WebSocket handshake: {any}", .{send_err});
                 };
                 ws_res.deinit();
-                ws_ctx.deinit();
+                ws_ctx_ptr.deinit();
+                alloc.destroy(ws_ctx_ptr);
                 result.success = false;
                 return;
             }
@@ -148,7 +165,8 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
         ws_res.send(task.conn.stream, &req) catch |err| {
             std.log.err("Failed to send WebSocket handshake response: {any}", .{err});
             ws_res.deinit();
-            ws_ctx.deinit();
+            ws_ctx_ptr.deinit();
+            alloc.destroy(ws_ctx_ptr);
             result.success = false;
             return;
         };
@@ -162,7 +180,8 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
         task.server.websockets.append(ws) catch |err| {
             std.log.err("Failed to append WebSocket to list: {any}", .{err});
             ws.close();
-            ws_ctx.deinit();
+            ws_ctx_ptr.deinit();
+            alloc.destroy(ws_ctx_ptr);
             result.success = false;
             return;
         };
@@ -175,14 +194,15 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
         const ws_task = WebSocketTask{
             .server = task.server,
             .ws = ws_ptr,
-            .ctx = &ws_ctx,
+            .ctx = ws_ctx_ptr, // Now using heap-allocated context
             .handler = ws_handler,
         };
         const ws_task_ptr = alloc.create(WebSocketTask) catch |err| {
             std.log.err("Failed to allocate WebSocketTask: {any}", .{err});
             _ = task.server.websockets.swapRemove(task.server.websockets.items.len - 1);
             ws.close();
-            ws_ctx.deinit();
+            ws_ctx_ptr.deinit();
+            alloc.destroy(ws_ctx_ptr);
             result.success = false;
             return;
         };
@@ -203,7 +223,8 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
             std.log.err("Failed to schedule WebSocket task: {any}", .{err});
             _ = task.server.websockets.swapRemove(task.server.websockets.items.len - 1);
             ws.close();
-            ws_ctx.deinit();
+            ws_ctx_ptr.deinit();
+            alloc.destroy(ws_ctx_ptr);
             alloc.destroy(ws_task_ptr);
             result.success = false;
             return;

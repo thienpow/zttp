@@ -24,7 +24,7 @@ pub const Response = struct {
 
     /// Initializes a new response with default values using the provided allocator.
     pub fn init(allocator: std.mem.Allocator) Response { // Changed parameter name for clarity
-        std.log.debug("Response.init with allocator: {any}", .{allocator});
+        // std.log.debug("Response.init with allocator: {any}", .{allocator});
         return .{
             .allocator = allocator, // Store the provided allocator
             .status = .ok,
@@ -35,7 +35,8 @@ pub const Response = struct {
 
     /// Frees all memory associated with the response. (Now does nothing as it doesn't own an arena)
     pub fn deinit(self: *Response) void {
-        std.log.debug("Response.deinit called for response using allocator: {any}", .{self.allocator});
+        _ = self;
+        // std.log.debug("Response.deinit called for response using allocator: {any}", .{self.allocator});
         // The allocator provided at init is responsible for freeing memory (e.g., the handleConnection arena)
         // We only need to potentially free the body if it was allocated separately,
         // but using the passed-in arena allocator handles this automatically on arena.deinit().
@@ -49,7 +50,7 @@ pub const Response = struct {
     pub fn setHeader(self: *Response, name: []const u8, value: []const u8) !void {
         try validateHeaderName(name);
         // Use self.allocator directly
-        std.log.debug("setHeader: name={s}, value={s}, allocator={any}", .{ name, value, self.allocator });
+        // std.log.debug("setHeader: name={s}, value={s}, allocator={any}", .{ name, value, self.allocator });
         // The headers map already uses self.allocator from init
         try self.headers.put(name, value);
     }
@@ -57,7 +58,7 @@ pub const Response = struct {
     /// Sets the response body.
     /// Overwrites existing body if it exists.
     pub fn setBody(self: *Response, body_data: []const u8) !void { // Renamed parameter
-        std.log.debug("setBody: body_len={d}, allocator={any}", .{ body_data.len, self.allocator });
+        // std.log.debug("setBody: body_len={d}, allocator={any}", .{ body_data.len, self.allocator });
         // If body exists and was allocated by self.allocator (which it should have been),
         // it will be freed when the arena backing self.allocator is deinit'd.
         // Overwriting self.body pointer is sufficient.
@@ -120,7 +121,7 @@ pub const Response = struct {
     /// Requires Sec-WebSocket-Key from the request.
     pub fn setWebSocketHandshake(self: *Response, ws_key: []const u8) !void {
         self.status = .switching_protocols;
-        std.log.debug("setWebSocketHandshake: ws_key={s}", .{ws_key});
+        // std.log.debug("setWebSocketHandshake: ws_key={s}", .{ws_key});
         // setHeader and setBody use self.allocator
         try self.setHeader("Upgrade", "websocket");
         // Note: Calculating Sec-WebSocket-Accept might need allocations.

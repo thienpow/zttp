@@ -28,10 +28,10 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
 
     defer {
         if (close_connection_on_exit) {
-            std.log.debug("Closing connection stream (FD: {d}) via handleConnection defer.", .{task.conn.stream.handle});
+            // std.log.debug("Closing connection stream (FD: {d}) via handleConnection defer.", .{task.conn.stream.handle});
             task.conn.stream.close();
         } else {
-            std.log.debug("Skipping connection stream close (FD: {d}) in handleConnection defer (WebSocket took ownership).", .{task.conn.stream.handle});
+            // std.log.debug("Skipping connection stream close (FD: {d}) in handleConnection defer (WebSocket took ownership).", .{task.conn.stream.handle});
         }
     }
 
@@ -42,7 +42,7 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
         return;
     };
     if (bytes_read == 0) {
-        std.log.debug("Connection closed by peer before request.", .{});
+        // std.log.debug("Connection closed by peer before request.", .{});
         result.success = true;
         return;
     }
@@ -60,7 +60,7 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
 
     // Check for WebSocket upgrade
     if (req.isWebSocketUpgrade()) {
-        std.log.debug("WebSocket upgrade request detected for path: {s}", .{req.path});
+        // std.log.debug("WebSocket upgrade request detected for path: {s}", .{req.path});
 
         var ws_res = Response.init(alloc);
         errdefer ws_res.deinit();
@@ -143,7 +143,7 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
 
         const http_handler = task.server.router.getHandler(req.method, req.path, &ctx);
         if (http_handler) |handler| {
-            std.log.debug("Running associated HTTP handler before WebSocket handshake for {s}", .{req.path});
+            // std.log.debug("Running associated HTTP handler before WebSocket handshake for {s}", .{req.path});
             handler(&req, &ws_res, &ctx);
             if (ws_res.status != .switching_protocols) {
                 std.log.warn("HTTP handler for WebSocket path {s} changed status to {d}, aborting handshake.", .{ req.path, @intFromEnum(ws_res.status) });
@@ -161,7 +161,7 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
         ws_res.setHeader("Upgrade", "websocket") catch {};
         ws_res.setHeader("Connection", "Upgrade") catch {};
 
-        std.log.debug("Sending WebSocket handshake response for {s}", .{req.path});
+        // std.log.debug("Sending WebSocket handshake response for {s}", .{req.path});
         ws_res.send(task.conn.stream, &req) catch |err| {
             std.log.err("Failed to send WebSocket handshake response: {any}", .{err});
             ws_res.deinit();
@@ -189,7 +189,7 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
 
         const ws_ptr = &task.server.websockets.items[task.server.websockets.items.len - 1];
 
-        std.log.info("WebSocket connection established for {s}", .{req.path});
+        // std.log.info("WebSocket connection established for {s}", .{req.path});
 
         const ws_task = WebSocketTask{
             .server = task.server,
@@ -232,7 +232,7 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
         _ = ws_task_id;
 
         close_connection_on_exit = false;
-        std.log.debug("WebSocket ownership transferred for FD {d}. handleConnection will not close it.", .{socket_fd});
+        // std.log.debug("WebSocket ownership transferred for FD {d}. handleConnection will not close it.", .{socket_fd});
 
         result.success = true;
         return;
@@ -285,7 +285,7 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
         callNextMiddleware(&req, &res, &ctx);
 
         if (res.body != null) {
-            std.log.debug("Response body set by middleware or handler, skipping template rendering.", .{});
+            // std.log.debug("Response body set by middleware or handler, skipping template rendering.", .{});
             res.send(task.conn.stream, &req) catch |send_err| {
                 std.log.err("Failed to send response after middleware: {any}", .{send_err});
                 result.success = false;
@@ -295,17 +295,17 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
             return;
         }
 
-        std.log.debug("Middleware chain complete, executing final handler.", .{});
+        // std.log.debug("Middleware chain complete, executing final handler.", .{});
         final_handler(&req, &res, &ctx);
     } else {
-        std.log.debug("No middleware configured, executing route handler directly.", .{});
+        // std.log.debug("No middleware configured, executing route handler directly.", .{});
         final_handler = task.server.router.getHandler(req.method, req.path, &ctx) orelse utils.notFound;
         final_handler(&req, &res, &ctx);
     }
 
     // Template Rendering
     if (res.body == null) {
-        std.log.debug("Response body not set by handler, attempting template rendering for {s}", .{req.path});
+        // std.log.debug("Response body not set by handler, attempting template rendering for {s}", .{req.path});
         const rendered = Template.renderTemplate(alloc, req.path, &ctx) catch |err| {
             std.log.err("Template rendering error for {s}: {any}", .{ req.path, err });
             utils.sendError(task.conn.stream, alloc, .internal_server_error, "Template Rendering Error");
@@ -314,7 +314,7 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
         };
 
         if (rendered) |r| {
-            std.log.debug("Template rendered successfully for {s}, setting body.", .{req.path});
+            // std.log.debug("Template rendered successfully for {s}, setting body.", .{req.path});
             res.setBody(r) catch {
                 utils.sendError(task.conn.stream, alloc, .internal_server_error, "Failed to set template body");
                 alloc.free(r);
@@ -333,10 +333,10 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
             return;
         }
     } else {
-        std.log.debug("Response body was already set, skipping template rendering for {s}.", .{req.path});
+        // std.log.debug("Response body was already set, skipping template rendering for {s}.", .{req.path});
     }
 
-    std.log.debug("Sending final HTTP response for {s}", .{req.path});
+    // std.log.debug("Sending final HTTP response for {s}", .{req.path});
     res.send(task.conn.stream, &req) catch |err| {
         std.log.err("Failed to send final response: {any}", .{err});
         result.success = false;

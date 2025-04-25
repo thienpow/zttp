@@ -107,7 +107,7 @@ pub fn handleWebSocket(task_ptr: *WebSocketTask, result: *ThreadPool.TaskResult)
             if (server_ws.socket == task.ws.socket) {
                 _ = task.server.websockets.swapRemove(i);
                 found = true;
-                std.log.info("Removed WebSocket (FD: {d}) from server list.", .{task.ws.socket});
+                // std.log.info("Removed WebSocket (FD: {d}) from server list.", .{task.ws.socket});
                 break;
             }
         }
@@ -119,18 +119,18 @@ pub fn handleWebSocket(task_ptr: *WebSocketTask, result: *ThreadPool.TaskResult)
         ws_close_done = true;
     }
 
-    std.log.info("WebSocket handler started for socket FD: {d}", .{task.ws.socket});
+    // std.log.info("WebSocket handler started for socket FD: {d}", .{task.ws.socket});
 
     var read_buffer: [4096]u8 = undefined;
 
     while (task.ws.is_open) {
         const header_bytes_read = task.ws.readBlocking(read_buffer[0..2]) catch |err| {
-            std.log.info("WebSocket read error (header): {any}. Closing connection FD: {d}", .{ err, task.ws.socket });
+            std.log.err("WebSocket read error (header): {any}. Closing connection FD: {d}", .{ err, task.ws.socket });
             break;
         };
 
         if (header_bytes_read == 0) {
-            std.log.info("WebSocket connection closed by peer (FD: {d}).", .{task.ws.socket});
+            // std.log.info("WebSocket connection closed by peer (FD: {d}).", .{task.ws.socket});
             break;
         }
         if (header_bytes_read < 2) {
@@ -222,19 +222,19 @@ pub fn handleWebSocket(task_ptr: *WebSocketTask, result: *ThreadPool.TaskResult)
 
             switch (opcode) {
                 0x8 => {
-                    std.log.info("WebSocket Close frame received. Closing connection FD: {d}", .{task.ws.socket});
+                    // std.log.info("WebSocket Close frame received. Closing connection FD: {d}", .{task.ws.socket});
                     task.ws.close();
                     break;
                 },
                 0x9 => {
-                    std.log.debug("WebSocket Ping frame received. Sending Pong. FD: {d}", .{task.ws.socket});
+                    // std.log.debug("WebSocket Ping frame received. Sending Pong. FD: {d}", .{task.ws.socket});
                     task.ws.sendFrame(0xA, control_payload) catch |err| {
                         std.log.err("Failed to send WebSocket Pong frame: {any}. Closing FD: {d}", .{ err, task.ws.socket });
                         break;
                     };
                 },
                 0xA => {
-                    std.log.debug("WebSocket Pong frame received. FD: {d}", .{task.ws.socket});
+                    // std.log.debug("WebSocket Pong frame received. FD: {d}", .{task.ws.socket});
                 },
                 else => {
                     std.log.warn("Unknown control frame opcode received: {x}. Closing FD: {d}", .{ opcode, task.ws.socket });
@@ -259,7 +259,7 @@ pub fn handleWebSocket(task_ptr: *WebSocketTask, result: *ThreadPool.TaskResult)
             if (opcode == 0x1) {
                 task.handler(task.ws, "", task.ctx);
             } else {
-                std.log.debug("Received empty binary frame. Ignoring. FD: {d}", .{task.ws.socket});
+                // std.log.debug("Received empty binary frame. Ignoring. FD: {d}", .{task.ws.socket});
             }
             continue;
         }
@@ -285,10 +285,10 @@ pub fn handleWebSocket(task_ptr: *WebSocketTask, result: *ThreadPool.TaskResult)
         if (opcode == 0x1) {
             task.handler(task.ws, payload_buffer, task.ctx);
         } else {
-            std.log.debug("Received binary frame ({d} bytes). Ignoring. FD: {d}", .{ payload_buffer.len, task.ws.socket });
+            // std.log.debug("Received binary frame ({d} bytes). Ignoring. FD: {d}", .{ payload_buffer.len, task.ws.socket });
         }
     }
 
-    std.log.info("WebSocket handler finished for FD: {d}", .{task.ws.socket});
+    // std.log.info("WebSocket handler finished for FD: {d}", .{task.ws.socket});
     result.success = true;
 }

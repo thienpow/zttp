@@ -1,10 +1,16 @@
-// src/middleware/logger.zig
 const std = @import("std");
 pub const Request = @import("../request.zig").Request;
 pub const Response = @import("../response.zig").Response;
 pub const Context = @import("../context.zig").Context;
 
 pub fn log(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Request, *Response, *Context) void) void {
+    // Skip middleware for WebSocket upgrade requests
+    if (req.isWebSocketUpgrade()) {
+        std.log.debug("Skipping logger middleware for WebSocket upgrade request: {s}", .{req.path});
+        next(req, res, ctx);
+        return;
+    }
+
     // Generate a unique request ID
     const request_id = std.fmt.allocPrint(ctx.allocator, "{d}", .{std.time.nanoTimestamp()}) catch "unknown";
     defer ctx.allocator.free(request_id); // Free request_id after use

@@ -1,124 +1,117 @@
 #extends "layout"
 
-    #block content
-        <title>ZTTP Showcase - WebSocket Chat</title>
-        <style>
-            #chat-messages {
-                height: 400px;
-                overflow-y: scroll;
-                border: 1px solid #ccc;
-                padding: 10px;
-                margin-bottom: 10px;
-                background-color: #f9f9f9;
-                display: flex;
-                flex-direction: column-reverse; /* New messages appear at the bottom */
-            }
-             .chat-message {
-                 padding: 5px 8px;
-                 margin-bottom: 5px;
-                 border-radius: 4px;
-                 max-width: 80%;
-             }
-             .chat-message.self {
-                 background-color: #d1ecf1; /* Light blue for self */
-                 align-self: flex-end;
-                 text-align: right;
-             }
-             .chat-message.other {
-                 background-color: #e2e3e5; /* Light grey for others */
-                 align-self: flex-start;
-             }
-            #chat-form {
-                display: flex;
-            }
-            #chat-form input[type="text"] {
-                flex-grow: 1;
-                padding: 8px;
-                margin-right: 5px;
-                border: 1px solid #ccc;
-                border-radius: 4px;
-            }
-            #chat-form button {
-                padding: 8px 15px;
-            }
-        </style>
+#block content
+    <title>ZTTP Showcase - WebSocket Chat</title>
+    <style>
+        #chat-container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        #chat-messages {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+            background-color: #f9f9f9;
+        }
+        .chat-message {
+            padding: 8px 12px;
+            margin: 5px 0;
+            border-radius: 6px;
+            max-width: 80%;
+            word-wrap: break-word;
+        }
+        .chat-message.self {
+            background-color: #d1ecf1; /* Light blue for self */
+            margin-left: auto;
+            text-align: right;
+        }
+        .chat-message.other {
+            background-color: #e2e3e5; /* Light grey for others */
+            margin-right: auto;
+        }
+        .chat-message.system {
+            background-color: #f8d7da; /* Light red for system messages */
+            text-align: center;
+            font-style: italic;
+        }
+        #chat-form {
+            display: flex;
+            gap: 10px;
+        }
+        #chat-form input[type="text"] {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 16px;
+        }
+        #chat-form button {
+            padding: 10px 20px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        #chat-form button:hover {
+            background-color: #0056b3;
+        }
+    </style>
 
+    <div id="chat-container">
         <h1>Simple WebSocket Chat</h1>
         <p>Powered by ZTTP WebSockets and HTMX.</p>
 
-        <!-- Add hx-ext attribute to enable WebSocket extension -->
-        <div id="chat-room" hx-ext="ws" ws-connect="/demos/chat">
-
-            <!-- Messages will be appended here -->
-            <!-- hx-swap="beforeend" is crucial for appending -->
+        <div id="chat-room" hx-ext="ws" ws-connect="/demos/websocket/chat/ws">
             <div id="chat-messages" hx-swap="beforeend">
-                <div style="text-align: center; color: #888;">Connecting...</div>
-                <!-- Messages from server will replace this div's content if swap isn't adjusted -->
-                <!-- But with beforeend, they append *inside* it -->
+                <div class="chat-message system">Connecting to chat...</div>
             </div>
 
-            <!-- Form to send messages via WebSocket -->
-            <!-- ws-send tells HTMX to send form data over the WS connection -->
             <form id="chat-form" ws-send>
-                <input type="text" id="message-input" name="chat_message" placeholder="Enter message..." autocomplete="off" required>
-                <button class="btn" data-variant="default" type="submit">Send</button>
+                <input type="text" id="message-input" name="chat_message" placeholder="Type your message..." autocomplete="off" required>
+                <button type="submit">Send</button>
             </form>
-
-             <!-- Add a hidden input/template to structure self-messages -->
-             <template id="self-message-template">
-                 <div class="chat-message self">You: {message}</div>
-             </template>
-
         </div>
-    #endblock
+    </div>
 
-    #block footer_scripts
-        <script>
-          // Optional: Client-side enhancement to clear input after sending
-          // and display self-message immediately without waiting for broadcast.
-          document.addEventListener('htmx:wsAfterSend', function(event) {
-            const form = event.detail.elt; // The form that sent the message
+    <script>
+        // Clear input and append self-message after sending
+        document.addEventListener('htmx:wsAfterSend', function(event) {
+            const form = event.detail.elt;
             const input = form.querySelector('input[name="chat_message"]');
-            const messageText = input.value; // Get the message text
+            const messageText = input.value.trim();
 
-            if (input && messageText) {
-              // 1. Clear the input field
-              input.value = '';
-
-              // 2. Display the message locally immediately
-              const messagesContainer = document.getElementById('chat-messages');
-              const template = document.getElementById('self-message-template');
-              if (messagesContainer && template) {
-                 // Clone the template content
-                 const clone = template.content.cloneNode(true);
-                 // Find the element inside the clone and set its text content
-                 const messageDiv = clone.querySelector('.chat-message');
-                 if (messageDiv) {
-                    // Replace placeholder - simple text replacement
-                     messageDiv.textContent = messageDiv.textContent.replace('{message}', messageText);
-                 }
-                 // Append the new message div
-                 messagesContainer.appendChild(clone);
-                 // Scroll to bottom (optional, might conflict with flex-direction: column-reverse)
-                 // messagesContainer.scrollTop = messagesContainer.scrollHeight;
-              }
+            if (messageText) {
+                const messagesContainer = document.getElementById('chat-messages');
+                const selfMessage = document.createElement('div');
+                selfMessage.className = 'chat-message self';
+                selfMessage.textContent = `You: ${messageText}`;
+                messagesContainer.appendChild(selfMessage);
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                input.value = ''; // Clear input
             }
-          });
+        });
 
-          // Clear the initial "Connecting..." message once connected
-          // This assumes the server doesn't send an initial message immediately
-          // which HTMX would swap in.
-           document.body.addEventListener('htmx:wsOpen', function(evt) {
-             const messagesContainer = document.getElementById('chat-messages');
-             if (messagesContainer && messagesContainer.children.length === 1 && messagesContainer.children[0].textContent === 'Connecting...') {
-                 messagesContainer.innerHTML = '<div style="text-align: center; color: green;">Connected!</div>'; // Replace connecting message
-                 setTimeout(() => { // Remove "Connected" message after a short delay
-                    if (messagesContainer.children.length === 1 && messagesContainer.children[0].textContent === 'Connected!') {
-                        messagesContainer.innerHTML = '';
-                    }
-                 }, 1500);
-             }
-           });
+        // Update UI on WebSocket connection
+        document.addEventListener('htmx:wsOpen', function() {
+            const messagesContainer = document.getElementById('chat-messages');
+            const connectingMessage = messagesContainer.querySelector('.chat-message.system');
+            if (connectingMessage && connectingMessage.textContent.includes('Connecting')) {
+                connectingMessage.textContent = 'Connected!';
+                connectingMessage.style.backgroundColor = '#d4edda'; // Light green
+                setTimeout(() => {
+                    connectingMessage.remove();
+                }, 1500);
+            }
+        });
 
-        </script>
-    #endblock
+        // Ensure new messages are visible
+        document.addEventListener('htmx:wsAfterMessage', function() {
+            const messagesContainer = document.getElementById('chat-messages');
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        });
+    </script>
+#endblock

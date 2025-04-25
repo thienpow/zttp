@@ -1,10 +1,10 @@
-// zttp/examples/src/routes/demos/chat/ws.zig
+// zttp/examples/src/routes/demos/chat/index.zig
 const std = @import("std");
 const zttp = @import("zttp");
+const Request = zttp.Request;
+const Response = zttp.Response;
+const Context = zttp.Context;
 
-const log = std.log.scoped(.chat_ws_handler);
-pub const is_chat = true;
-
-pub fn ws(wsk: *zttp.WebSocket, message: []const u8, _: *const zttp.Context) void {
-    log.info("WS Handler received raw message on FD {d}: {s}", .{ wsk.socket, message });
+pub fn get(_: *Request, res: *Response, _: *Context) void {
+    res.status = .ok;
 }

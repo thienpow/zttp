@@ -316,6 +316,4 @@ pub fn generateRoutesAndTemplates(allocator: std.mem.Allocator, routes_dir_path:
         \\    return templates.toOwnedSlice();
         \\}
     );
-
-    std.debug.print("Generated {s} with {} routes and {} templates\n", .{ output_file, routes.items.len, templates.items.len });
 }

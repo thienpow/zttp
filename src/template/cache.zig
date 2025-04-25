@@ -104,7 +104,7 @@ pub fn putTokenizedTemplate(key: []const u8, raw_content: []const u8) !void {
     try cache.put(key_copy, cached_data);
     // If put fails, key_copy and entry_arena are cleaned up by their errdefers.
 
-    std.log.debug("Cached {s}", .{key_copy});
+    // std.log.debug("Cached {s}", .{key_copy});
 }
 
 pub fn getTokens(key: []const u8) !?*const std.ArrayList(types.Token) {

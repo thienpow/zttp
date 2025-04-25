@@ -32,10 +32,10 @@ pub fn callNextMiddleware(req: *Request, res: *Response, ctx: *Context) void {
     if (context_ptr.index < context_ptr.middlewares.len) {
         const mw = context_ptr.middlewares[context_ptr.index];
         context_ptr.index += 1;
-        std.log.debug("Calling middleware index {d}", .{context_ptr.index - 1});
+        //std.log.debug("Calling middleware index {d}", .{context_ptr.index - 1});
         mw(req, res, ctx, callNextMiddleware);
     } else {
-        std.log.debug("Middleware chain exhausted, finding final route handler.", .{});
+        //std.log.debug("Middleware chain exhausted, finding final route handler.", .{});
         context_ptr.final_handler.* = context_ptr.server.router.getHandler(req.method, req.path, ctx) orelse utils.notFound;
     }
 }

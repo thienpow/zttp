@@ -35,8 +35,14 @@ pub fn getRoutes(allocator: std.mem.Allocator) ![]const Route {
     try routes.append(Route{
         .module_name = try allocator.dupe(u8, "websocket"),
         .method = .get,
+        .path = try allocator.dupe(u8, "/demos/websocket/chat/ws"),
+        .ws_handler = @import("routes/demos/websocket/chat/ws.zig").ws,
+    });
+    try routes.append(Route{
+        .module_name = try allocator.dupe(u8, "index"),
+        .method = .get,
         .path = try allocator.dupe(u8, "/demos/websocket/chat"),
-        .ws_handler = @import("routes/demos/websocket/chat/index.zig").ws,
+        .handler = @import("routes/demos/websocket/chat/index.zig").get,
     });
     try routes.append(Route{
         .module_name = try allocator.dupe(u8, "index"),

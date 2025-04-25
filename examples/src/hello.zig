@@ -8,7 +8,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const options = zttp.ServerOptions{
-        .port = 8080,
+        .port = 8088,
     };
 
     var bundle = try zttp.createServer(allocator, options);

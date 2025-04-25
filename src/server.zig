@@ -91,7 +91,18 @@ pub const Server = struct {
         const alloc = task.server.allocator;
 
         // Ensure connection stream is closed
-        defer task.conn.stream.close();
+        var close_connection_on_exit = true;
+
+        // The defer will capture the 'close_connection_on_exit' flag
+        defer {
+            if (close_connection_on_exit) {
+                std.log.debug("Closing connection stream (FD: {d}) via handleConnection defer.", .{task.conn.stream.handle});
+                // Use the connection's deinit, which handles closing the stream
+                task.conn.stream.close();
+            } else {
+                std.log.debug("Skipping connection stream close (FD: {d}) in handleConnection defer (WebSocket took ownership).", .{task.conn.stream.handle});
+            }
+        }
 
         var buffer: [65536]u8 = undefined;
         const bytes_read = task.conn.stream.read(&buffer) catch |err| {
@@ -121,11 +132,12 @@ pub const Server = struct {
             std.log.debug("WebSocket upgrade request detected for path: {s}", .{req.path});
 
             var ws_res = Response.init(alloc);
-            defer ws_res.deinit(); // Explicit cleanup for WebSocket response
+            errdefer ws_res.deinit(); // Explicit cleanup for WebSocket response
 
             const ws_key = req.headers.get("Sec-WebSocket-Key") orelse {
                 std.log.err("Missing Sec-WebSocket-Key for WebSocket upgrade.", .{});
                 sendError(task.conn.stream, alloc, .bad_request, "Missing Sec-WebSocket-Key");
+                ws_res.deinit();
                 result.success = false;
                 return;
             };
@@ -134,6 +146,7 @@ pub const Server = struct {
             ws_res.setWebSocketHandshake(ws_key) catch |err| {
                 std.log.err("Failed to set WebSocket handshake response: {any}", .{err});
                 sendError(task.conn.stream, alloc, .internal_server_error, "Handshake Error");
+                ws_res.deinit();
                 result.success = false;
                 return;
             };
@@ -150,6 +163,7 @@ pub const Server = struct {
             while (original_ctx_it.next()) |entry| {
                 const key_copy = alloc.dupe(u8, entry.key_ptr.*) catch |err| {
                     std.log.err("Failed to copy context key for WebSocket: {any}", .{err});
+                    ws_res.deinit();
                     result.success = false;
                     return;
                 };
@@ -158,6 +172,7 @@ pub const Server = struct {
                 const value_copy = alloc.dupe(u8, entry.value_ptr.*) catch |err| {
                     std.log.err("Failed to copy context value for WebSocket: {any}", .{err});
                     alloc.free(key_copy);
+                    ws_res.deinit();
                     result.success = false;
                     return;
                 };
@@ -167,6 +182,7 @@ pub const Server = struct {
                     std.log.err("Failed to set copied context for WebSocket: {any}", .{err});
                     alloc.free(key_copy);
                     alloc.free(value_copy);
+                    ws_res.deinit();
                     result.success = false;
                     return;
                 };
@@ -176,6 +192,7 @@ pub const Server = struct {
             const ws_handler = task.server.router.getWebSocketHandler(req.method, req.path, &ws_ctx) orelse {
                 std.log.warn("No WebSocket handler found for path: {s}", .{req.path});
                 sendError(task.conn.stream, alloc, .not_found, "No WebSocket handler found");
+                ws_res.deinit();
                 result.success = false;
                 return;
             };
@@ -190,6 +207,7 @@ pub const Server = struct {
                     ws_res.send(task.conn.stream, &req) catch |send_err| {
                         std.log.err("Failed to send handler response for aborted WebSocket handshake: {any}", .{send_err});
                     };
+                    ws_res.deinit();
                     result.success = false;
                     return;
                 }
@@ -203,23 +221,27 @@ pub const Server = struct {
             std.log.debug("Sending WebSocket handshake response for {s}", .{req.path});
             ws_res.send(task.conn.stream, &req) catch |err| {
                 std.log.err("Failed to send WebSocket handshake response: {any}", .{err});
+                ws_res.deinit();
                 result.success = false;
                 return;
             };
 
+            ws_res.deinit();
             // Initialize WebSocket with the FD
             const socket_fd = task.conn.stream.handle;
             var ws = WebSocket.init(socket_fd, alloc);
             var ws_added_to_server = false;
-            defer if (!ws_added_to_server) ws.close(); // Close if not added to server
+            defer if (!ws_added_to_server and close_connection_on_exit) ws.close();
 
             // Add to server's WebSocket list (needs thread safety)
             task.server.websockets.append(ws) catch |err| {
                 std.log.err("Failed to append WebSocket to list: {any}", .{err});
+                ws.close();
                 result.success = false;
                 return;
             };
             ws_added_to_server = true;
+
             const ws_ptr = &task.server.websockets.items[task.server.websockets.items.len - 1];
 
             std.log.info("WebSocket connection established for {s}", .{req.path});
@@ -233,16 +255,13 @@ pub const Server = struct {
             };
             const ws_task_ptr = alloc.create(WebSocketTask) catch |err| {
                 std.log.err("Failed to allocate WebSocketTask: {any}", .{err});
-                // Remove socket from server's list
-                for (task.server.websockets.items, 0..) |*server_ws, i| {
-                    if (server_ws.socket == ws_ptr.socket) {
-                        _ = task.server.websockets.swapRemove(i);
-                        break;
-                    }
-                }
+                // Remove the just-added socket from the list
+                _ = task.server.websockets.swapRemove(task.server.websockets.items.len - 1);
+                ws.close(); // Close the socket
                 result.success = false;
-                return;
+                return; // Defer closes connection
             };
+            // Ensure task ptr is destroyed if scheduling fails
             errdefer alloc.destroy(ws_task_ptr);
             ws_task_ptr.* = ws_task;
 
@@ -258,18 +277,17 @@ pub const Server = struct {
                 null,
             ) catch |err| {
                 std.log.err("Failed to schedule WebSocket task: {any}", .{err});
-                // Remove socket from server's list
-                for (task.server.websockets.items, 0..) |*server_ws, i| {
-                    if (server_ws.socket == ws_ptr.socket) {
-                        _ = task.server.websockets.swapRemove(i);
-                        break;
-                    }
-                }
+                // Remove the just-added socket from the list
+                _ = task.server.websockets.swapRemove(task.server.websockets.items.len - 1);
+                ws.close(); // Close the socket
+                alloc.destroy(ws_task_ptr); // Destroy the allocated task struct
                 result.success = false;
                 return;
             };
             _ = ws_task_id;
 
+            close_connection_on_exit = false;
+            std.log.debug("WebSocket ownership transferred for FD {d}. handleConnection will not close it.", .{socket_fd});
             // Transfer ownership of ws_ctx to the task
             ctx_transfer_successful = true;
 

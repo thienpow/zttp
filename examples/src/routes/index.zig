@@ -38,8 +38,4 @@ pub fn get(req: *Request, res: *Response, ctx: *Context) void {
             setCtx(ctx, "username", "User"); // Fallback to default if alloc fails
         }
     }
-
-    log.debug("Context set for GET /: logged_in={s}", .{
-        ctx.get("logged_in") orelse "N/A",
-    });
 }

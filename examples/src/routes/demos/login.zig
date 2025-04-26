@@ -9,14 +9,10 @@ const Context = zttp.Context;
 pub fn get(_: *Request, res: *Response, ctx: *Context) void {
     res.status = .ok;
     ctx.set("logged_in", "false") catch return; // Not logged in when viewing form
-    // Render routes/login.zmx (implicitly via route definition)
 }
 
 // Handler to process the login form submission
 pub fn post(req: *Request, res: *Response, ctx: *Context) void {
-    // In a real app: parse form, validate credentials against DB, set session/cookie
-    // Here, we simulate: check for specific username/password
-
     var username: ?[]const u8 = null;
     var password: ?[]const u8 = null;
 
@@ -68,10 +64,7 @@ pub fn post(req: *Request, res: *Response, ctx: *Context) void {
     // --- Login Failure ---
     std.log.warn("Simulated login failed for user: {?s}", .{username});
     res.status = .unauthorized;
-    // ctx.set("site_name", "My Awesome Site") catch {};
-    // ctx.set("page_title", "Login") catch {};
     ctx.set("logged_in", "false") catch {};
     ctx.set("error_message", "Invalid username or password.") catch {}; // Error message for login form
     ctx.set("submitted_username", username orelse "") catch {}; // Re-fill username field
-    // No setTemplatePath - let router render the default login.zmx
 }

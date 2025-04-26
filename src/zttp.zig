@@ -32,8 +32,8 @@ pub const HttpMethod = enum {
 
 pub const ServerOptions = struct {
     port: u16 = 8080,
-    min_threads: usize = 2,
-    max_threads: usize = 8,
+    min_threads: usize = 12,
+    max_threads: usize = 16,
     max_tasks: usize = 100,
     adaptive_scaling: bool = true,
     log_level: LogLevel = LogLevel.debug,

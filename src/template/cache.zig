@@ -129,13 +129,13 @@ pub fn getTokens(key: []const u8) !?*const std.ArrayList(types.Token) {
     // Handle root path ("/" -> "index")
     if (trimmed.len == 0) {
         if (findEntry(&cache, "index")) |tokens_ptr| return tokens_ptr;
-        std.log.debug("Cache miss for root path ('index')", .{});
+        //std.log.debug("Cache miss for root path ('index')", .{});
         return null;
     }
 
     // 1. Try the trimmed path directly
     if (findEntry(&cache, trimmed)) |tokens_ptr| return tokens_ptr;
-    std.log.debug("Cache miss for trimmed path: {s}", .{trimmed});
+    //std.log.debug("Cache miss for trimmed path: {s}", .{trimmed});
 
     // 2. If not found, try appending "/index"
     if (!std.mem.endsWith(u8, trimmed, "/index")) {
@@ -151,7 +151,7 @@ pub fn getTokens(key: []const u8) !?*const std.ArrayList(types.Token) {
 
         if (findEntry(&cache, index_key_lookup)) |tokens_ptr| return tokens_ptr;
     } else {
-        std.log.debug("Skipping append /index because path already ends with it: {s}", .{trimmed});
+        //std.log.debug("Skipping append /index because path already ends with it: {s}", .{trimmed});
     }
 
     // 3. If neither worked, return null

@@ -36,6 +36,14 @@ pub const ServerOptions = struct {
     max_threads: usize = 8,
     max_tasks: usize = 100,
     adaptive_scaling: bool = true,
+    log_level: LogLevel = LogLevel.debug,
+};
+
+pub const LogLevel = enum {
+    debug,
+    info,
+    warn,
+    err,
 };
 
 pub const Route = struct {

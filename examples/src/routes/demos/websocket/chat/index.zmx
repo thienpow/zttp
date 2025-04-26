@@ -12,16 +12,21 @@
             height: 400px;
             overflow-y: auto;
             border: 1px solid #ccc;
-            padding: 10px;
-            margin-bottom: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
             background-color: #f9f9f9;
+            border-radius: 8px;
+        }
+        .message-wrapper {
+            margin: 8px 0;
         }
         .chat-message {
-            padding: 8px 12px;
-            margin: 5px 0;
+            display: block;
+            padding: 10px 15px;
             border-radius: 6px;
             max-width: 80%;
             word-wrap: break-word;
+            line-height: 1.4;
         }
         .chat-message.self {
             background-color: #d1ecf1; /* Light blue for self */
@@ -36,6 +41,8 @@
             background-color: #f8d7da; /* Light red for system messages */
             text-align: center;
             font-style: italic;
+            margin: 8px auto;
+            max-width: 100%;
         }
         #chat-form {
             display: flex;
@@ -66,8 +73,10 @@
         <p>Powered by ZTTP WebSockets and HTMX.</p>
 
         <div id="chat-room" hx-ext="ws" ws-connect="/demos/websocket/chat/ws">
-            <div id="chat-messages" hx-swap="beforeend">
-                <div class="chat-message system">Connecting to chat...</div>
+            <div id="chat-messages">
+                <div class="message-wrapper">
+                    <div class="chat-message system">Connecting to chat...</div>
+                </div>
             </div>
 
             <form id="chat-form" ws-send>
@@ -78,38 +87,84 @@
     </div>
 
     <script>
+        // Get username from query parameter
+        const urlParams = new URLSearchParams(window.location.search);
+        const username = urlParams.get('user') || 'Guest';
+
+        // Debug connection attempts
+        document.addEventListener('htmx:wsConnecting', function(event) {
+            console.log('Attempting to connect to WebSocket:', event.detail);
+        });
+
+        // Update UI on WebSocket connection
+        document.addEventListener('htmx:wsOpen', function(event) {
+            console.log('WebSocket connected:', event.detail);
+            const messagesContainer = document.getElementById('chat-messages');
+            const connectingMessage = messagesContainer.querySelector('.chat-message.system');
+            if (connectingMessage && connectingMessage.textContent.includes('Connecting')) {
+                connectingMessage.textContent = 'Connected!';
+                connectingMessage.style.backgroundColor = '#d4edda';
+                setTimeout(() => {
+                    connectingMessage.parentElement.remove();
+                }, 1500);
+            }
+        });
+
+        // Debug connection errors
+        document.addEventListener('htmx:wsError', function(event) {
+            console.error('WebSocket error:', event.detail);
+            const messagesContainer = document.getElementById('chat-messages');
+            const wrapper = document.createElement('div');
+            wrapper.className = 'message-wrapper';
+            const errorMessage = document.createElement('div');
+            errorMessage.className = 'chat-message system';
+            errorMessage.textContent = 'Connection error. Retrying...';
+            wrapper.appendChild(errorMessage);
+            messagesContainer.appendChild(wrapper);
+        });
+
+        // Debug connection close
+        document.addEventListener('htmx:wsClose', function(event) {
+            console.log('WebSocket closed:', event.detail);
+            const messagesContainer = document.getElementById('chat-messages');
+            const wrapper = document.createElement('div');
+            wrapper.className = 'message-wrapper';
+            const closeMessage = document.createElement('div');
+            closeMessage.className = 'chat-message system';
+            closeMessage.textContent = 'Connection closed.';
+            wrapper.appendChild(closeMessage);
+            messagesContainer.appendChild(wrapper);
+        });
+
         // Clear input and append self-message after sending
         document.addEventListener('htmx:wsAfterSend', function(event) {
+            console.log('Message sent:', event.detail);
             const form = event.detail.elt;
             const input = form.querySelector('input[name="chat_message"]');
             const messageText = input.value.trim();
 
             if (messageText) {
                 const messagesContainer = document.getElementById('chat-messages');
+                const wrapper = document.createElement('div');
+                wrapper.className = 'message-wrapper';
                 const selfMessage = document.createElement('div');
                 selfMessage.className = 'chat-message self';
-                selfMessage.textContent = `You: ${messageText}`;
-                messagesContainer.appendChild(selfMessage);
+                selfMessage.textContent = `${username}: ${messageText}`;
+                wrapper.appendChild(selfMessage);
+                messagesContainer.appendChild(wrapper);
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
-                input.value = ''; // Clear input
+                input.value = '';
             }
         });
 
-        // Update UI on WebSocket connection
-        document.addEventListener('htmx:wsOpen', function() {
-            const messagesContainer = document.getElementById('chat-messages');
-            const connectingMessage = messagesContainer.querySelector('.chat-message.system');
-            if (connectingMessage && connectingMessage.textContent.includes('Connecting')) {
-                connectingMessage.textContent = 'Connected!';
-                connectingMessage.style.backgroundColor = '#d4edda'; // Light green
-                setTimeout(() => {
-                    connectingMessage.remove();
-                }, 1500);
-            }
+        // Debug incoming messages
+        document.addEventListener('htmx:wsBeforeMessage', function(event) {
+            console.log('Received WebSocket message:', event.detail.message);
         });
 
-        // Ensure new messages are visible
-        document.addEventListener('htmx:wsAfterMessage', function() {
+        // Scroll to bottom after message is appended
+        document.addEventListener('htmx:wsAfterMessage', function(event) {
+            console.log('Message processed:', event.detail.message);
             const messagesContainer = document.getElementById('chat-messages');
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         });

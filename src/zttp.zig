@@ -6,9 +6,8 @@ pub const Request = @import("request.zig").Request;
 pub const Response = @import("response.zig").Response;
 pub const Context = @import("context.zig").Context;
 pub const WebSocket = @import("websocket.zig").WebSocket;
-
-const Server = @import("server.zig").Server;
-const ThreadPool = @import("pool.zig").ThreadPool;
+pub const ThreadPool = @import("pool.zig").ThreadPool;
+pub const Server = @import("server.zig").Server;
 
 const router = @import("router.zig");
 const MiddlewareFn = router.MiddlewareFn;
@@ -28,15 +27,6 @@ pub const HttpMethod = enum {
     head,
     options,
     trace,
-};
-
-pub const ServerOptions = struct {
-    port: u16 = 8080,
-    min_threads: usize = 12,
-    max_threads: usize = 16,
-    max_tasks: usize = 100,
-    adaptive_scaling: bool = true,
-    log_level: LogLevel = LogLevel.debug,
 };
 
 pub const LogLevel = enum {
@@ -60,30 +50,23 @@ pub const Template = struct {
 };
 
 pub fn createServer(
-    parent_allocator: std.mem.Allocator,
-    options: ServerOptions,
+    allocator: std.mem.Allocator,
+    server_options: Server.Options,
 ) !*ServerBundle {
-    var arena = std.heap.ArenaAllocator.init(parent_allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
     const alloc = arena.allocator();
 
-    const pool_options = ThreadPool.Options{
-        .min_threads = options.min_threads,
-        .max_threads = options.max_threads,
-        .max_tasks = options.max_tasks,
-        .adaptive_scaling = options.adaptive_scaling,
-    };
-
     var pool = try alloc.create(ThreadPool);
-    pool.* = try ThreadPool.init(parent_allocator, pool_options);
+    pool.* = try ThreadPool.init(allocator, server_options.thread_pool_options);
     errdefer {
         pool.deinit();
         alloc.destroy(pool);
     }
 
-    try pool.startWorkers(options.min_threads);
+    try pool.startWorkers(server_options.thread_pool_options.min_threads);
 
     var server = try alloc.create(Server);
-    server.* = Server.init(parent_allocator, options.port, pool);
+    server.* = Server.init(allocator, server_options, pool);
     errdefer {
         server.deinit();
         alloc.destroy(server);
@@ -94,7 +77,7 @@ pub fn createServer(
         .arena = arena,
         .server = server,
         .pool = pool,
-        .options = options,
+        .server_options = server_options,
     };
 
     return bundle;
@@ -104,7 +87,7 @@ pub const ServerBundle = struct {
     arena: std.heap.ArenaAllocator,
     server: *Server,
     pool: *ThreadPool,
-    options: ServerOptions,
+    server_options: Server.Options,
 
     pub fn start(self: *ServerBundle, start_thread: bool) !void {
         if (start_thread) {

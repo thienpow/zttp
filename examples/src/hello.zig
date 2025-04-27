@@ -1,5 +1,8 @@
 const std = @import("std");
 const zttp = @import("zttp");
+const Server = zttp.Server;
+const WebSocket = zttp.WebSocket;
+const ThreadPool = zttp.ThreadPool;
 const chat_ws = @import("routes/demos/websocket/chat/ws.zig");
 
 pub fn main() !void {
@@ -9,9 +12,16 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Server configuration
-    const options = zttp.ServerOptions{
+    const options = Server.Options{
         .port = 8088,
-        .log_level = .debug, // Set to .info in production
+        .thread_pool_options = ThreadPool.Options{},
+        .websocket_options = WebSocket.Options{
+            .blocking = false,
+            .poll_timeout_ms = 2000,
+            .retry_sleep_ns = 5 * std.time.ns_per_ms,
+            .max_payload_size = 2 * 1024 * 1024,
+            .read_buffer_size = 8192,
+        },
     };
 
     // Create the server

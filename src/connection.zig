@@ -1,3 +1,4 @@
+// src/connection.zig
 const std = @import("std");
 const Context = @import("context.zig").Context;
 const Request = @import("request.zig").Request;
@@ -22,16 +23,11 @@ pub const ConnectionTask = struct {
 
 pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) void {
     const alloc = task.server.allocator;
-
-    // Ensure connection stream is closed
     var close_connection_on_exit = true;
 
     defer {
         if (close_connection_on_exit) {
-            // std.log.debug("Closing connection stream (FD: {d}) via handleConnection defer.", .{task.conn.stream.handle});
             task.conn.stream.close();
-        } else {
-            // std.log.debug("Skipping connection stream close (FD: {d}) in handleConnection defer (WebSocket took ownership).", .{task.conn.stream.handle});
         }
     }
 
@@ -42,7 +38,6 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
         return;
     };
     if (bytes_read == 0) {
-        // std.log.debug("Connection closed by peer before request.", .{});
         result.success = true;
         return;
     }
@@ -58,10 +53,7 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
     var ctx = Context.init(alloc);
     defer ctx.deinit();
 
-    // Check for WebSocket upgrade
     if (req.isWebSocketUpgrade()) {
-        // std.log.debug("WebSocket upgrade request detected for path: {s}", .{req.path});
-
         var ws_res = Response.init(alloc);
         errdefer ws_res.deinit();
 
@@ -81,7 +73,6 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
             return;
         };
 
-        // Heap-allocate the WebSocket context so it persists after this function returns
         var ws_ctx_ptr = alloc.create(Context) catch |err| {
             std.log.err("Failed to allocate WebSocket context: {any}", .{err});
             ws_res.deinit();
@@ -92,10 +83,8 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
             ws_ctx_ptr.deinit();
             alloc.destroy(ws_ctx_ptr);
         }
-
         ws_ctx_ptr.* = Context.init(alloc);
 
-        // Copy values from original context to WebSocket context
         var original_ctx_it = ctx.data.iterator();
         while (original_ctx_it.next()) |entry| {
             const key_copy = alloc.dupe(u8, entry.key_ptr.*) catch |err| {
@@ -109,7 +98,7 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
             errdefer alloc.free(key_copy);
 
             const value_copy = alloc.dupe(u8, entry.value_ptr.*) catch |err| {
-                std.log.err("Failed to copy context value for WebSocket: {any}", .{err});
+                std.log.err("Failed to copy context value foriquid: {any}", .{err});
                 alloc.free(key_copy);
                 ws_res.deinit();
                 ws_ctx_ptr.deinit();
@@ -143,7 +132,6 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
 
         const http_handler = task.server.router.getHandler(req.method, req.path, &ctx);
         if (http_handler) |handler| {
-            // std.log.debug("Running associated HTTP handler before WebSocket handshake for {s}", .{req.path});
             handler(&req, &ws_res, &ctx);
             if (ws_res.status != .switching_protocols) {
                 std.log.warn("HTTP handler for WebSocket path {s} changed status to {d}, aborting handshake.", .{ req.path, @intFromEnum(ws_res.status) });
@@ -161,7 +149,6 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
         ws_res.setHeader("Upgrade", "websocket") catch {};
         ws_res.setHeader("Connection", "Upgrade") catch {};
 
-        // std.log.debug("Sending WebSocket handshake response for {s}", .{req.path});
         ws_res.send(task.conn.stream, &req) catch |err| {
             std.log.err("Failed to send WebSocket handshake response: {any}", .{err});
             ws_res.deinit();
@@ -173,7 +160,7 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
 
         ws_res.deinit();
         const socket_fd = task.conn.stream.handle;
-        var ws = WebSocket.init(socket_fd, alloc);
+        var ws = WebSocket.init(socket_fd, alloc, task.server.options.websocket_options);
         var ws_added_to_server = false;
         defer if (!ws_added_to_server and close_connection_on_exit) ws.close();
 
@@ -189,12 +176,10 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
 
         const ws_ptr = &task.server.websockets.items[task.server.websockets.items.len - 1];
 
-        // std.log.info("WebSocket connection established for {s}", .{req.path});
-
         const ws_task = WebSocketTask{
             .server = task.server,
             .ws = ws_ptr,
-            .ctx = ws_ctx_ptr, // Now using heap-allocated context
+            .ctx = ws_ctx_ptr,
             .handler = ws_handler,
         };
         const ws_task_ptr = alloc.create(WebSocketTask) catch |err| {
@@ -232,8 +217,6 @@ pub fn handleConnection(task: ConnectionTask, result: *ThreadPool.TaskResult) vo
         _ = ws_task_id;
 
         close_connection_on_exit = false;
-        // std.log.debug("WebSocket ownership transferred for FD {d}. handleConnection will not close it.", .{socket_fd});
-
         result.success = true;
         return;
     }

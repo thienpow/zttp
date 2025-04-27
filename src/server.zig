@@ -11,22 +11,29 @@ const Router = @import("router.zig").Router;
 const HttpMethod = @import("zttp.zig").HttpMethod;
 const Template = @import("template/main.zig");
 const WebSocket = @import("websocket.zig").WebSocket;
+
 const Connection = @import("connection.zig");
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
     listener: ?std.net.Server,
-    port: u16,
+    options: Options,
     running: bool,
     router: Router,
     pool: *ThreadPool,
     websockets: std.ArrayList(WebSocket),
 
-    pub fn init(allocator: std.mem.Allocator, port: u16, pool: *ThreadPool) Server {
+    pub const Options = struct {
+        port: u16 = 8088,
+        thread_pool_options: ThreadPool.Options = .{},
+        websocket_options: WebSocket.Options = .{},
+    };
+
+    pub fn init(allocator: std.mem.Allocator, options: Options, pool: *ThreadPool) Server {
         return .{
             .allocator = allocator,
             .listener = null,
-            .port = port,
+            .options = options,
             .running = false,
             .router = Router.init(allocator),
             .pool = pool,
@@ -56,11 +63,11 @@ pub const Server = struct {
     pub fn start(self: *Server) !void {
         if (self.running) return error.AlreadyRunning;
 
-        const address = try std.net.Address.parseIp("0.0.0.0", self.port);
+        const address = try std.net.Address.parseIp("0.0.0.0", self.options.port);
         self.listener = try address.listen(.{ .reuse_address = true });
         self.running = true;
 
-        std.log.info("Server listening on 0.0.0.0:{d}", .{self.port});
+        std.log.info("Server listening on 0.0.0.0:{d}", .{self.options.port});
 
         while (self.running) {
             const conn = self.listener.?.accept() catch |err| {

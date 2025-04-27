@@ -22,8 +22,8 @@ pub const ThreadPool = struct {
 
     /// Options for configuring the ThreadPool
     pub const Options = struct {
-        min_threads: usize = 2,
-        max_threads: usize = 8,
+        min_threads: usize = 8,
+        max_threads: usize = 16,
         max_tasks: usize = 100,
         shutdown_timeout_ns: u64 = 5 * std.time.ns_per_s,
         affinity_map: ?[]const usize = null,

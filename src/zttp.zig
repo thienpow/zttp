@@ -1,4 +1,4 @@
-// src/zttp.zig
+// zttp/src/zttp.zig
 const std = @import("std");
 
 pub const Middleware = @import("middleware/mod.zig");
@@ -67,7 +67,7 @@ pub fn createServer(
     try pool.startWorkers(server_options.thread_pool_options.min_threads);
 
     var server = try alloc.create(Server);
-    server.* = Server.init(allocator, server_options, pool);
+    server.* = try Server.init(allocator, server_options, pool);
     errdefer {
         server.deinit();
         alloc.destroy(server);

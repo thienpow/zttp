@@ -1,11 +1,7 @@
+// zttp/src/async/queue.zig
 const std = @import("std");
 const assert = std.debug.assert;
-// Assuming Task struct definition is available via global or parent import
-// (It is available via async.zig/task.zig imports in the files that use queue.zig)
 
-/// An intrusive queue implementation. The type T must have a field
-/// "next" of type `?*T` and a field "state" which is an enum with a value matching the passed in
-/// value
 pub fn Intrusive(comptime T: type, comptime state: @Type(.enum_literal)) type {
     return struct {
         const Self = @This();
@@ -34,21 +30,21 @@ pub fn Intrusive(comptime T: type, comptime state: @Type(.enum_literal)) type {
         }
 
         /// Enqueue a new element to the front of the queue.
-        pub fn pushFront(self: *Self, v: *T) void {
-            assert(v.next == null);
-            v.state = set_state; // Ensure state is set correctly
+        // pub fn pushFront(self: *Self, v: *T) void {
+        //     assert(v.next == null);
+        //     v.state = set_state; // Ensure state is set correctly
 
-            if (self.head) |head| {
-                // If we have elements, the new element becomes the head
-                v.next = head;
-                head.prev = v;
-                self.head = v;
-            } else {
-                // If empty, this is the first and only element
-                self.head = v;
-                self.tail = v;
-            }
-        }
+        //     if (self.head) |head| {
+        //         // If we have elements, the new element becomes the head
+        //         v.next = head;
+        //         head.prev = v;
+        //         self.head = v;
+        //     } else {
+        //         // If empty, this is the first and only element
+        //         self.head = v;
+        //         self.tail = v;
+        //     }
+        // }
 
         /// Dequeue the next element from the queue.
         pub fn pop(self: *Self) ?*T {
@@ -76,11 +72,9 @@ pub fn Intrusive(comptime T: type, comptime state: @Type(.enum_literal)) type {
             return self.head == null;
         }
 
-        /// Removes the item from the queue. Asserts that Queue contains the item
+        /// Removes the item from the queue. Checks if item is in the queue first.
         pub fn remove(self: *Self, item: *T) void {
-            assert(self.hasItem(item)); // Assert item is in the queue
-            assert(item.state == set_state); // Assert state matches the queue type
-
+            assert(self.hasItem(item));
             if (item.prev) |prev| prev.next = item.next else self.head = item.next;
 
             if (item.next) |next| next.prev = item.prev else self.tail = item.prev;

@@ -1,3 +1,4 @@
+// examples/src/routes/demos/websocket/chat/ws.zig
 const std = @import("std");
 const zttp = @import("zttp");
 
@@ -86,7 +87,7 @@ const ServerState = struct {
         return false;
     }
 
-    pub fn broadcast(message: []const u8, sender_id: u64) !void {
+    pub fn broadcast(message: []const u8, sender_id: u64, async_ctx: zttp.AsyncContext) !void {
         std.log.debug("ServerState.broadcast: Broadcasting message '{s}' from sender {d}", .{ message, sender_id });
         if (instance == null) return error.NotInitialized;
 
@@ -111,10 +112,10 @@ const ServerState = struct {
             std.log.debug("ServerState.broadcast: Collected {d} recipients", .{recipients.items.len});
         }
 
-        // Send messages to all recipients
+        // Send messages to all recipients asynchronously
         for (recipients.items) |recipient| {
             std.log.debug("ServerState.broadcast: Sending to client {d}", .{recipient.id});
-            recipient.wsk.sendMessage(message_copy) catch |err| {
+            recipient.wsk.sendMessageAsync(message_copy, async_ctx) catch |err| {
                 std.log.err("ServerState.broadcast: Failed to send to client {d}: {any}", .{ recipient.id, err });
                 continue;
             };
@@ -150,7 +151,7 @@ const ServerState = struct {
                 std.log.debug("ServerState.broadcast: Retrying for {d} new recipients", .{retry_recipients.items.len});
                 for (retry_recipients.items) |recipient| {
                     std.log.debug("ServerState.broadcast: Retry sending to client {d}", .{recipient.id});
-                    recipient.wsk.sendMessage(message_copy) catch |err| {
+                    recipient.wsk.sendMessageAsync(message_copy, async_ctx) catch |err| {
                         std.log.err("ServerState.broadcast: Retry failed for client {d}: {any}", .{ recipient.id, err });
                         continue;
                     };
@@ -158,8 +159,6 @@ const ServerState = struct {
                 }
             }
         }
-
-        //std.log.debug("ServerState.broadcast: Completed for {d} initial recipients and {d} retries", .{ recipients.items.len, retry_recipients.items.len });
     }
 
     pub fn getClientCount() usize {
@@ -208,7 +207,8 @@ fn parseQueryParameter(allocator: Allocator, url: []const u8, param_name: []cons
     return null;
 }
 
-pub fn ws(wsk: *zttp.WebSocket, message: []const u8, _: *zttp.Context) void {
+pub fn ws(wsk: *zttp.WebSocket, message: []const u8, ctx: *zttp.Context, async_ctx: zttp.AsyncContext) void {
+    _ = ctx;
     std.log.debug("ws: Entering for wsk={*}, message_len={d}", .{ wsk, message.len });
     if (ServerState.instance == null) {
         std.log.err("ws: WebSocket module not initialized", .{});
@@ -296,7 +296,7 @@ pub fn ws(wsk: *zttp.WebSocket, message: []const u8, _: *zttp.Context) void {
         var join_buf: [256]u8 = undefined;
         if (std.fmt.bufPrint(&join_buf, "<div hx-swap-oob=\"beforeend:#chat-messages\" class=\"message-wrapper\"><div class=\"chat-message system\">{s} joined the chat</div></div>", .{username})) |join_msg| {
             std.log.debug("ws: Broadcasting join message for client {d}", .{client_id});
-            ServerState.broadcast(join_msg, client_id) catch |err| {
+            ServerState.broadcast(join_msg, client_id, async_ctx) catch |err| {
                 std.log.err("ws: Failed to broadcast join message: {any}", .{err});
             };
         } else |err| {
@@ -316,7 +316,7 @@ pub fn ws(wsk: *zttp.WebSocket, message: []const u8, _: *zttp.Context) void {
             var leave_buf: [256]u8 = undefined;
             if (std.fmt.bufPrint(&leave_buf, "<div hx-swap-oob=\"beforeend:#chat-messages\" class=\"message-wrapper\"><div class=\"chat-message system\">{s} left the chat</div></div>", .{client.username})) |leave_msg| {
                 std.log.debug("ws: Broadcasting leave message for client {d}", .{client_id});
-                ServerState.broadcast(leave_msg, client_id) catch |err| {
+                ServerState.broadcast(leave_msg, client_id, async_ctx) catch |err| {
                     std.log.err("ws: Failed to broadcast leave message: {any}", .{err});
                 };
             } else |err| {
@@ -359,7 +359,7 @@ pub fn ws(wsk: *zttp.WebSocket, message: []const u8, _: *zttp.Context) void {
             var msg_buf: [600]u8 = undefined;
             if (std.fmt.bufPrint(&msg_buf, "<div hx-swap-oob=\"beforeend:#chat-messages\" class=\"message-wrapper\"><div class=\"chat-message other\">{s}: {s}</div></div>", .{ username, p.value.chat_message })) |formatted| {
                 std.log.debug("ws: Broadcasting chat message from client {d}", .{client_id});
-                ServerState.broadcast(formatted, client_id) catch |err| {
+                ServerState.broadcast(formatted, client_id, async_ctx) catch |err| {
                     std.log.err("ws: Failed to broadcast chat message: {any}", .{err});
                 };
             } else |err| {

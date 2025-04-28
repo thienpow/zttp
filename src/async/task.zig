@@ -1,7 +1,7 @@
 // zttp/src/async/task.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const AsyncIoContext = @import("async.zig").AsyncIoContext; // Renamed from Ring
+const AsyncIo = @import("async.zig").AsyncIo; // Renamed from Ring
 const Context = @import("async.zig").Context;
 const Request = @import("op_request.zig").Request;
 const Result = @import("op_request.zig").Result;
@@ -10,7 +10,7 @@ const OperationType = @import("op_request.zig").OperationType; // Import the ren
 pub const Task = struct {
     userdata: ?*anyopaque = null, // User data pointer for the callback
     msg: u16 = 0, // User message/enum discriminator for the callback
-    callback: *const fn (*AsyncIoContext, Task) anyerror!void, // Callback signature uses AsyncIoContext
+    callback: *const fn (*AsyncIo, Task) anyerror!void, // Callback signature uses AsyncIo
 
     req: Request = .noop, // The definition of the asynchronous request
     result: ?Result = null, // The result of the operation once completed
@@ -44,7 +44,7 @@ pub const Task = struct {
     /// This method will be implemented later, after the backend supports cancel.
     pub fn cancel(
         self: *Task, // The task to be canceled
-        ring: *AsyncIoContext, // Uses AsyncIoContext
+        ring: *AsyncIo, // Uses AsyncIo
         ctx: Context, // Context for the cancellation *request's* completion
     ) Allocator.Error!*Task {
         // Create a new Task for the cancel request itself

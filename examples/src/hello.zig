@@ -16,9 +16,6 @@ pub fn main() !void {
         .port = 8088,
         .thread_pool_options = ThreadPool.Options{},
         .websocket_options = WebSocket.Options{
-            .blocking = false,
-            .poll_timeout_ms = 2000,
-            .retry_sleep_ns = 5 * std.time.ns_per_ms,
             .max_payload_size = 2 * 1024 * 1024,
             .read_buffer_size = 8192,
         },

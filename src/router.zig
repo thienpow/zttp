@@ -5,11 +5,12 @@ const Response = @import("response.zig").Response;
 const Context = @import("context.zig").Context;
 const WebSocket = @import("websocket.zig").WebSocket;
 const HttpMethod = @import("zttp.zig").HttpMethod;
+const AsyncContext = @import("async/async.zig").Context;
 
 pub const HandlerFn = *const fn (*Request, *Response, *Context) void;
 pub const MiddlewareFn = *const fn (*Request, *Response, *Context, NextFn) void;
 pub const NextFn = *const fn (*Request, *Response, *Context) void;
-pub const WebSocketHandlerFn = *const fn (ws: *WebSocket, data: []const u8, ctx: *Context) void;
+pub const WebSocketHandlerFn = *const fn (*WebSocket, []const u8, *Context, AsyncContext) void;
 
 pub const Router = struct {
     routes: std.ArrayList(Route),

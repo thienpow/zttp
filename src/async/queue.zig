@@ -30,21 +30,21 @@ pub fn Intrusive(comptime T: type, comptime state: @Type(.enum_literal)) type {
         }
 
         /// Enqueue a new element to the front of the queue.
-        // pub fn pushFront(self: *Self, v: *T) void {
-        //     assert(v.next == null);
-        //     v.state = set_state; // Ensure state is set correctly
+        pub fn pushFront(self: *Self, v: *T) void {
+            assert(v.next == null);
+            v.state = set_state; // Ensure state is set correctly
 
-        //     if (self.head) |head| {
-        //         // If we have elements, the new element becomes the head
-        //         v.next = head;
-        //         head.prev = v;
-        //         self.head = v;
-        //     } else {
-        //         // If empty, this is the first and only element
-        //         self.head = v;
-        //         self.tail = v;
-        //     }
-        // }
+            if (self.head) |head| {
+                // If we have elements, the new element becomes the head
+                v.next = head;
+                head.prev = v;
+                self.head = v;
+            } else {
+                // If empty, this is the first and only element
+                self.head = v;
+                self.tail = v;
+            }
+        }
 
         /// Dequeue the next element from the queue.
         pub fn pop(self: *Self) ?*T {

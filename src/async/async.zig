@@ -24,58 +24,40 @@ pub const Timespec = extern struct {
     }
 };
 
+pub const Callback = *const fn (*AsyncIo, Task) anyerror!void;
+pub fn noopCallback(_: *AsyncIo, _: Task) anyerror!void {}
+
 pub const Context = struct {
     ptr: ?*anyopaque = null,
     msg: u16 = 0,
-    cb: *const fn (*AsyncIoContext, Task) anyerror!void,
+    cb: Callback = noopCallback,
 };
 
-pub const BackendType = enum {
-    io_uring,
-    dummy,
-};
+pub const CompletionQueue = Queue(Task, .complete);
+pub const FreeQueue = Queue(Task, .free);
+pub const SubmissionQueue = Queue(Task, .in_flight);
 
-pub const AsyncIoContext = struct {
+pub const AsyncIo = struct {
     gpa: Allocator,
-    backend: union(BackendType) {
-        io_uring: IOUringBackend,
-        dummy: void,
-    },
-    submission_q: Queue(Task, .in_flight) = .{},
-    free_q: Queue(Task, .free) = .{},
+    backend: IOUringBackend,
+    completion_q: CompletionQueue = .{},
+    submission_q: SubmissionQueue = .{},
+    free_q: FreeQueue = .{},
 
-    pub fn init(gpa: Allocator, entries: u16, backend_type: BackendType) !AsyncIoContext {
-        std.log.debug("AsyncIoContext.init: backend_type={any}, entries={d}", .{ backend_type, entries });
-        switch (backend_type) {
-            .io_uring => {
-                if (builtin.os.tag != .linux) {
-                    @compileError("zttp async backend (io_uring) only supports Linux");
-                }
-                return .{
-                    .gpa = gpa,
-                    .backend = .{ .io_uring = try IOUringBackend.init(entries) },
-                    .submission_q = .{},
-                    .free_q = .{},
-                };
-            },
-            .dummy => {
-                std.log.debug("AsyncIoContext.init: Dummy backend initialized", .{});
-                return .{
-                    .gpa = gpa,
-                    .backend = .dummy,
-                    .submission_q = .{},
-                    .free_q = .{},
-                };
-            },
+    pub fn init(gpa: Allocator, entries: u16) !AsyncIo {
+        if (builtin.os.tag != .linux) {
+            @compileError("zttp async backend (io_uring) only supports Linux");
         }
+        return .{
+            .gpa = gpa,
+            .backend = try IOUringBackend.init(entries),
+            .submission_q = .{},
+            .free_q = .{},
+        };
     }
 
-    pub fn deinit(self: *AsyncIoContext) void {
-        std.log.debug("AsyncIoContext.deinit: backend={any}", .{self.backend});
-        switch (self.backend) {
-            .io_uring => |*backend| backend.deinit(self.gpa),
-            .dummy => {},
-        }
+    pub fn deinit(self: *AsyncIo) void {
+        self.backend.deinit(self.gpa);
         while (self.submission_q.pop()) |task| {
             std.log.debug("Deinit: destroying submission_q task={*}", .{task});
             self.gpa.destroy(task);
@@ -86,24 +68,12 @@ pub const AsyncIoContext = struct {
         }
     }
 
-    pub fn submit(self: *AsyncIoContext) !void {
-        switch (self.backend) {
-            .io_uring => |*backend| {
-                try backend.submit(&self.submission_q);
-                try self.reapCompletions();
-            },
-            .dummy => {
-                std.log.debug("AsyncIoContext.submit: Dummy backend, no async I/O", .{});
-                // Simulate task processing by moving tasks to free_q
-                while (self.submission_q.pop()) |task| {
-                    task.state = .complete;
-                    self.free_q.push(task);
-                }
-            },
-        }
+    pub fn submit(self: *AsyncIo) !void {
+        try self.backend.submit(&self.submission_q);
+        try self.reapCompletions();
     }
 
-    pub fn getTask(self: *AsyncIoContext) Allocator.Error!*Task {
+    pub fn getTask(self: *AsyncIo) Allocator.Error!*Task {
         const task = self.free_q.pop() orelse try self.gpa.create(Task);
         task.* = .{
             .userdata = null,
@@ -115,48 +85,28 @@ pub const AsyncIoContext = struct {
             .next = null,
             .prev = null,
         };
+        std.log.debug("Task acquired (ptr: {*}, req: {s})", .{ task, @tagName(task.req) });
         return task;
     }
 
-    pub fn submitAndWait(self: *AsyncIoContext) !void {
-        switch (self.backend) {
-            .io_uring => |*backend| {
-                try backend.submitAndWait(&self.submission_q);
-                try self.reapCompletions();
-            },
-            .dummy => return error.BackendNotImplemented,
-        }
+    pub fn submitAndWait(self: *AsyncIo) !void {
+        try self.backend.submitAndWait(&self.submission_q);
+        try self.reapCompletions();
     }
 
-    pub fn reapCompletions(self: *AsyncIoContext) !void {
-        switch (self.backend) {
-            .io_uring => |*backend| try backend.reapCompletions(self),
-            .dummy => {
-                std.log.debug("AsyncIoContext.reapCompletions: Dummy backend, no completions", .{});
-            },
-        }
+    pub fn reapCompletions(self: *AsyncIo) !void {
+        try self.backend.reapCompletions(self);
     }
 
-    pub fn done(self: *AsyncIoContext) bool {
-        switch (self.backend) {
-            .io_uring => |*backend| return backend.done() and self.submission_q.empty(),
-            .dummy => return self.submission_q.empty(),
-        }
+    pub fn done(self: *AsyncIo) bool {
+        return self.backend.done();
     }
 
-    pub fn pollableFd(self: *AsyncIoContext) !posix.fd_t {
-        switch (self.backend) {
-            .io_uring => |*backend| return backend.pollableFd(),
-            .dummy => return error.NoPollableFd,
-        }
+    pub fn pollableFd(self: *AsyncIo) !posix.fd_t {
+        return self.backend.pollableFd();
     }
 
-    pub fn releaseTaskToFreeQueue(self: *AsyncIoContext, task: *Task) void {
-        task.state = .free;
-        self.free_q.push(task);
-    }
-
-    pub fn noop(self: *AsyncIoContext, ctx: Context) Allocator.Error!*Task {
+    pub fn noop(self: *AsyncIo, ctx: Context) Allocator.Error!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -168,7 +118,7 @@ pub const AsyncIoContext = struct {
         return task;
     }
 
-    pub fn accept(self: *AsyncIoContext, fd: posix.fd_t, ctx: Context) Allocator.Error!*Task {
+    pub fn accept(self: *AsyncIo, fd: posix.fd_t, ctx: Context) Allocator.Error!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -180,7 +130,7 @@ pub const AsyncIoContext = struct {
         return task;
     }
 
-    pub fn recv(self: *AsyncIoContext, fd: posix.fd_t, buffer: []u8, ctx: Context) Allocator.Error!*Task {
+    pub fn recv(self: *AsyncIo, fd: posix.fd_t, buffer: []u8, ctx: Context) Allocator.Error!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -192,7 +142,7 @@ pub const AsyncIoContext = struct {
         return task;
     }
 
-    pub fn write(self: *AsyncIoContext, fd: posix.fd_t, buffer: []const u8, ctx: Context) Allocator.Error!*Task {
+    pub fn write(self: *AsyncIo, fd: posix.fd_t, buffer: []const u8, ctx: Context) Allocator.Error!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -204,7 +154,7 @@ pub const AsyncIoContext = struct {
         return task;
     }
 
-    pub fn writev(self: *AsyncIoContext, fd: posix.fd_t, vecs: []const posix.iovec_const, ctx: Context) Allocator.Error!*Task {
+    pub fn writev(self: *AsyncIo, fd: posix.fd_t, vecs: []const posix.iovec_const, ctx: Context) Allocator.Error!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -216,7 +166,7 @@ pub const AsyncIoContext = struct {
         return task;
     }
 
-    pub fn close(self: *AsyncIoContext, fd: posix.fd_t, ctx: Context) Allocator.Error!*Task {
+    pub fn close(self: *AsyncIo, fd: posix.fd_t, ctx: Context) Allocator.Error!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -228,17 +178,19 @@ pub const AsyncIoContext = struct {
         return task;
     }
 
-    pub fn timer(self: *AsyncIoContext, duration: Timespec, ctx: Context) Allocator.Error!*Task {
+    pub fn timer(self: *AsyncIo, duration: Timespec, ctx: Context) Allocator.Error!*Task {
         _ = self;
         _ = duration;
         _ = ctx;
         return error.OperationNotImplemented;
     }
 
-    pub fn cancelAll(self: *AsyncIoContext) Allocator.Error!*Task {
-        _ = self;
-        return error.OperationNotImplemented;
+    pub fn cancelAll(self: *AsyncIo) Allocator.Error!void {
+        const task = try self.getTask();
+        task.* = .{
+            .req = .{ .cancel = .all },
+        };
+
+        self.submission_q.push(task);
     }
 };
-
-pub fn noopCallback(_: *AsyncIoContext, _: Task) anyerror!void {}

@@ -9,6 +9,7 @@ pub const WebSocket = @import("websocket.zig").WebSocket;
 pub const ThreadPool = @import("pool.zig").ThreadPool;
 pub const Server = @import("server.zig").Server;
 pub const Async = @import("async/async.zig");
+pub const AsyncContext = Async.Context;
 
 const router = @import("router.zig");
 const MiddlewareFn = router.MiddlewareFn;

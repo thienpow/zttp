@@ -1,4 +1,3 @@
-// zttp/src/async/io_uring.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const builtin = @import("builtin");
@@ -9,7 +8,7 @@ const log = std.log.scoped(.iouring);
 
 const Queue = @import("queue.zig").Intrusive;
 const Task = @import("task.zig").Task;
-const AsyncIoContext = @import("async.zig").AsyncIoContext;
+const AsyncIo = @import("async.zig").AsyncIo;
 const OperationType = @import("op_request.zig").OperationType;
 const Request = @import("op_request.zig").Request;
 const Result = @import("op_request.zig").Result;
@@ -80,25 +79,22 @@ pub const IOUringBackend = struct {
         //log.debug("prepSubmissionQueue: Processing submission_q ({} tasks)", .{submission_q.len()});
         while (submission_q.pop()) |task| {
             const sqe = self.ring.get_sqe() catch |err| {
-                // if (err == error.SubmissionQueueFull) {
-                //     submission_q.pushFront(task);
-                //     log.warn("io_uring SQ full ({} ready), {any} (ptr: {*}) re-queued to front", .{ self.ring.sq_ready(), task.req, task });
-                //     return;
-                // }
+                submission_q.pushFront(task);
+                log.warn("io_uring SQ full ({} ready), {any} (ptr: {*}) re-queued to front", .{ self.ring.sq_ready(), task.req, task });
                 return err;
             };
 
             self.prepTask(sqe, task);
             self.in_flight.push(task);
-            const fd_for_log = switch (task.req) {
-                .accept => |fd| fd,
-                .recv => |r| r.fd,
-                .write => |w| w.fd,
-                .writev => |wv| wv.fd,
-                .close => |fd| fd,
-                else => -1,
-            };
-            log.debug("Prepped SQE for task {any} (ptr: {*}, FD: {d}), moved from submission_q to in_flight", .{ task.req, task, fd_for_log });
+            // const fd_for_log = switch (task.req) {
+            //     .accept => |fd| fd,
+            //     .recv => |r| r.fd,
+            //     .write => |w| w.fd,
+            //     .writev => |wv| wv.fd,
+            //     .close => |fd| fd,
+            //     else => -1,
+            // };
+            //log.debug("Prepped SQE for task {any} (ptr: {*}, FD: {d}), moved from submission_q to in_flight", .{ task.req, task, fd_for_log });
         }
         //log.debug("prepSubmissionQueue: Finished processing submission_q. {} tasks now in_flight.", .{self.in_flight.len()});
     }
@@ -162,7 +158,7 @@ pub const IOUringBackend = struct {
         }
     }
 
-    pub fn reapCompletions(self: *IOUringBackend, ring: *AsyncIoContext) anyerror!void {
+    pub fn reapCompletions(self: *IOUringBackend, async_io: *AsyncIo) anyerror!void {
         //log.debug("reapCompletions started ({} in_flight)", .{self.in_flight.len()});
         var cqe_count: usize = 0;
         var cqes: [16]linux.io_uring_cqe = undefined;
@@ -171,10 +167,15 @@ pub const IOUringBackend = struct {
         for (cqes[0..num_cqes]) |cqe| {
             cqe_count += 1;
             const task: *Task = @ptrFromInt(cqe.user_data);
-            //log.debug("Reaping CQE for task type: {any} (ptr: {*}) with res={d}, flags={b}", .{ task.req, task, cqe.res, cqe.flags });
+            // Validate task pointer to prevent segfault
+            if (cqe.user_data == 0 or !self.in_flight.hasItem(task)) {
+                log.err("Invalid task pointer {*}, user_data={d} not in in_flight queue, skipping CQE", .{ task, cqe.user_data });
+                continue;
+            }
+            log.debug("Reaping CQE for task (ptr: {*}, state: {s}, res={d}, flags={b})", .{ task, @tagName(task.state), cqe.res, cqe.flags });
 
             const was_canceled_before_cqe = (task.state == .canceled);
-            self.handleCompletion(ring, task, &cqe, was_canceled_before_cqe);
+            self.handleCompletion(async_io, task, &cqe, was_canceled_before_cqe);
         }
 
         if (cqe_count > 0) {
@@ -184,19 +185,33 @@ pub const IOUringBackend = struct {
         }
     }
 
-    fn handleCompletion(self: *IOUringBackend, ring: *AsyncIoContext, task: *Task, cqe: *const linux.io_uring_cqe, skip_callback: bool) void {
+    fn handleCompletion(self: *IOUringBackend, async_io: *AsyncIo, task: *Task, cqe: *const linux.io_uring_cqe, skip_callback: bool) void {
         const res = cqe.res;
         var op_error: ?anyerror = null;
 
+        // Log task details before processing
+        log.debug("Handling completion for task (ptr: {*}, req: {s}, state: {s})", .{ task, taskReqName(task.req), @tagName(task.state) });
+
         if (res < 0) {
             const errno = @as(u32, @intCast(-res));
-            log.debug("io_uring operation {any} (ptr: {*}) failed with errno: {d}", .{ task.req, task, errno });
+            const fd = switch (task.req) {
+                .recv => |r| r.fd,
+                .write => |w| w.fd,
+                .writev => |wv| wv.fd,
+                .close => |c| c,
+                .accept => |a| a,
+                else => -1,
+            };
+            log.debug("io_uring operation failed with errno: {d} for task (ptr: {*}, req: {s}, fd={d})", .{ errno, task, taskReqName(task.req), fd });
             op_error = switch (errno) {
+                9, 14 => if (task.req == .recv or task.req == .write or task.req == .writev) error.Unexpected else error.BadFileDescriptor, // EBADF
                 @intFromEnum(std.posix.E.CANCELED) => error.Canceled,
-                @intFromEnum(std.posix.E.AGAIN) => error.Unexpected,
-                @intFromEnum(std.posix.E.CONNRESET) => if (task.req == .recv) RecvError.ConnectionResetByPeer else error.Unexpected,
-                @intFromEnum(std.posix.E.INVAL) => ResultError.Invalid,
-                140 => if (builtin.target.os.tag != .linux) error.Unexpected else error.Unexpected, // WOULDBLOCK for non-Linux
+                @intFromEnum(std.posix.E.CONNRESET) => if (task.req == .recv) RecvError.ConnectionResetByPeer else error.ConnectionReset,
+                @intFromEnum(std.posix.E.PIPE) => if (task.req == .recv) error.Unexpected else error.BrokenPipe,
+                @intFromEnum(std.posix.E.INVAL) => error.InvalidArgument,
+                @intFromEnum(std.posix.E.AGAIN) => if (task.req == .recv) error.WouldBlock else error.WouldBlock,
+                @intFromEnum(std.posix.E.CONNREFUSED) => error.ConnectionRefused,
+                @intFromEnum(std.posix.E.NOTCONN) => error.NotConnected,
                 else => error.Unexpected,
             };
 
@@ -219,11 +234,13 @@ pub const IOUringBackend = struct {
             // Safe removal - check if task is in the in_flight queue
             if (self.in_flight.hasItem(task)) {
                 self.in_flight.remove(task);
+                log.debug("Removed task (ptr: {*}, req: {s}) from in_flight queue due to error", .{ task, taskReqName(task.req) });
             } else {
-                log.warn("Task {*} ({any}) not found in in_flight queue during error cleanup", .{ task, task.req });
+                log.warn("Task (ptr: {*}, req: {s}) not found in in_flight queue during error cleanup", .{ task, taskReqName(task.req) });
             }
 
-            ring.free_q.push(task);
+            async_io.free_q.push(task);
+            log.debug("Task (ptr: {*}, req: {s}) moved to free_q after error", .{ task, taskReqName(task.req) });
         } else {
             var success_result: Result = undefined;
 
@@ -257,29 +274,32 @@ pub const IOUringBackend = struct {
             task.result = success_result;
 
             if (cqe.flags & linux.IORING_CQE_F_MORE != 0) {
-                log.debug("Task {any} (ptr: {*}) has MORE completions pending (flags={b})", .{ task.req, task, cqe.flags });
+                log.debug("Task (ptr: {*}, req: {s}) has MORE completions pending (flags={b})", .{ task, taskReqName(task.req), cqe.flags });
                 task.state = .in_flight;
             } else {
-                log.debug("Task {any} (ptr: {*}) has no more completions (flags={b}). Releasing.", .{ task.req, task, cqe.flags });
+                log.debug("Task (ptr: {*}, req: {s}) has no more completions (flags={b}). Releasing.", .{ task, taskReqName(task.req), cqe.flags });
                 task.state = .complete;
 
                 // Safe removal - check if task is in the in_flight queue
                 if (self.in_flight.hasItem(task)) {
                     self.in_flight.remove(task);
+                    log.debug("Removed task (ptr: {*}, req: {s}) from in_flight queue after completion", .{ task, taskReqName(task.req) });
                 } else {
-                    log.warn("Task {*} ({any}) not found in in_flight queue during completion", .{ task, task.req });
+                    log.warn("Task (ptr: {*}, req: {s}) not found in in_flight queue during completion", .{ task, taskReqName(task.req) });
                 }
 
-                ring.free_q.push(task);
+                async_io.free_q.push(task);
+                log.debug("Task (ptr: {*}, req: {s}) moved to free_q after completion", .{ task, taskReqName(task.req) });
             }
         }
 
         if (!skip_callback) {
-            task.callback(ring, task.*) catch |cb_err| {
-                log.err("Callback for task {any} (ptr: {*}) failed: {s}", .{ task.req, task, errorName(cb_err) });
+            log.debug("Executing callback for task (ptr: {*}, req: {s})", .{ task, taskReqName(task.req) });
+            task.callback(async_io, task.*) catch |cb_err| {
+                log.err("Callback for task (ptr: {*}, req: {s}) failed: {s}", .{ task, taskReqName(task.req), errorName(cb_err) });
             };
         } else {
-            log.debug("Skipping callback for task {any} (ptr: {*}) due to skip_callback flag", .{ task.req, task });
+            log.debug("Skipping callback for task (ptr: {*}, req: {s}) due to skip_callback flag", .{ task, taskReqName(task.req) });
         }
     }
 
@@ -294,5 +314,19 @@ pub const IOUringBackend = struct {
 
     fn errorName(err: anyerror) []const u8 {
         return @errorName(err);
+    }
+
+    // Helper to safely format task.req without risking segfault
+    fn taskReqName(req: Request) []const u8 {
+        return switch (req) {
+            .noop => "noop",
+            .accept => "accept",
+            .recv => "recv",
+            .write => "write",
+            .writev => "writev",
+            .close => "close",
+            .timer => "timer",
+            .cancel => "cancel",
+        };
     }
 };

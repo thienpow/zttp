@@ -5,6 +5,12 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // const async_module = b.addModule("async", .{
+    //     .root_source_file = b.path("src/async/async.zig"), // The top-level file for the module
+    //     .target = target,
+    //     .optimize = optimize,
+    // });
+
     // Export zttp module for dependencies
     const zttp_module = b.addModule("zttp", .{
         .root_source_file = b.path("src/zttp.zig"),
@@ -36,6 +42,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     lib.step.dependOn(routegen_step);
+
     b.installArtifact(lib);
 
     // Ensure routegen is installed for dependencies
@@ -49,6 +56,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     tests.root_module.addImport("zttp", zttp_module);
+
     const run_tests = b.addRunArtifact(tests);
     test_step.dependOn(&run_tests.step);
 }

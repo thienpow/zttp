@@ -18,7 +18,6 @@ pub const Server = struct {
     options: Options,
     running: std.atomic.Value(bool),
     router: Router,
-    websockets: std.ArrayList(WebSocket),
     websocket_fds: std.AutoHashMap(std.posix.fd_t, void),
     connections: std.AutoHashMap(std.posix.fd_t, *Connection),
 
@@ -37,7 +36,6 @@ pub const Server = struct {
             .options = options,
             .running = std.atomic.Value(bool).init(false),
             .router = Router.init(allocator),
-            .websockets = std.ArrayList(WebSocket).init(allocator),
             .websocket_fds = std.AutoHashMap(std.posix.fd_t, void).init(allocator),
             .connections = std.AutoHashMap(std.posix.fd_t, *Connection).init(allocator),
         };
@@ -62,11 +60,7 @@ pub const Server = struct {
         }
         self.connections.deinit();
 
-        // Clean up WebSocket connections
-        for (self.websockets.items) |*ws| {
-            ws.close(.{});
-        }
-        self.websockets.deinit();
+        // Clean up WebSocket FDs
         self.websocket_fds.deinit();
 
         // Clean up async_io and listener

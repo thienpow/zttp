@@ -5,7 +5,7 @@ const WebSocket = zttp.WebSocket;
 const Context = zttp.Context;
 const AsyncContext = zttp.AsyncContext;
 
-pub fn ws(wsk: *WebSocket, message: []const u8, ctx: *Context, async_ctx: AsyncContext) void {
+pub fn ws(wsk: *WebSocket, message: []const u8, ctx: *Context, async_ctx: AsyncContext) anyerror!void {
     _ = ctx;
     std.log.info("WS message received: {s}", .{message});
     if (std.mem.eql(u8, message, "ping")) {

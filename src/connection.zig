@@ -491,13 +491,11 @@ fn completeWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
     std.log.debug("Completing WebSocket upgrade for FD: {d}", .{conn.fd});
 
     const ws = WebSocket.init(conn.fd, conn.allocator, conn.server.options.websocket_options, conn.server.async_io.?);
-    try conn.server.websockets.append(ws);
-    const ws_ptr = &conn.server.websockets.items[conn.server.websockets.items.len - 1];
+    const ws_conn = try WebSocketConnection.init(conn.server, ws, ws_ctx, ws_handler, conn.allocator);
 
     try conn.server.websocket_fds.put(conn.fd, {});
     std.log.debug("Added FD: {d} to websocket_fds after upgrade", .{conn.fd});
 
-    const ws_conn = try WebSocketConnection.init(conn.server, ws_ptr, ws_ctx, ws_handler, conn.allocator);
     std.log.debug("WebSocketConnection initialized for FD: {d}, ws_conn_ptr={x}", .{ conn.fd, @intFromPtr(ws_conn) });
 
     conn.state = .upgrading_websocket;
@@ -520,12 +518,6 @@ fn handleWebSocketClose(_: *AsyncIo, task: *Task) anyerror!void {
     ws_conn.state = .closed;
 
     _ = ws_conn.server.websocket_fds.remove(ws_conn.ws.socket);
-    for (ws_conn.server.websockets.items, 0..) |*ws, i| {
-        if (ws.socket == ws_conn.ws.socket) {
-            _ = ws_conn.server.websockets.swapRemove(i);
-            break;
-        }
-    }
 
     ws_conn.deinit();
     ws_conn.allocator.destroy(wrapper);

@@ -10,7 +10,7 @@ const AsyncContext = @import("async/async.zig").Context;
 pub const HandlerFn = *const fn (*Request, *Response, *Context) void;
 pub const MiddlewareFn = *const fn (*Request, *Response, *Context, NextFn) void;
 pub const NextFn = *const fn (*Request, *Response, *Context) void;
-pub const WebSocketHandlerFn = *const fn (*WebSocket, []const u8, *Context, AsyncContext) void;
+pub const WebSocketHandlerFn = *const fn (*WebSocket, []const u8, *Context, AsyncContext) anyerror!void;
 
 pub const Router = struct {
     routes: std.ArrayList(Route),

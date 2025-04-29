@@ -14,7 +14,7 @@ pub fn main() !void {
     // Server configuration
     const options = Server.Options{
         .port = 8088,
-        .thread_pool_options = ThreadPool.Options{},
+
         .websocket_options = WebSocket.Options{
             .max_payload_size = 2 * 1024 * 1024,
             .read_buffer_size = 8192,

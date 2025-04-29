@@ -1,4 +1,3 @@
-// zttp/src/async/async.zig
 const std = @import("std");
 const builtin = @import("builtin");
 
@@ -24,8 +23,8 @@ pub const Timespec = extern struct {
     }
 };
 
-pub const Callback = *const fn (*AsyncIo, Task) anyerror!void;
-pub fn noopCallback(_: *AsyncIo, _: Task) anyerror!void {}
+pub const Callback = *const fn (*AsyncIo, *Task) anyerror!void;
+pub fn noopCallback(_: *AsyncIo, _: *Task) anyerror!void {}
 
 pub const Context = struct {
     ptr: ?*anyopaque = null,
@@ -33,16 +32,16 @@ pub const Context = struct {
     cb: Callback = noopCallback,
 };
 
-pub const CompletionQueue = Queue(Task, .complete);
-pub const FreeQueue = Queue(Task, .free);
-pub const SubmissionQueue = Queue(Task, .in_flight);
+const log = std.log.scoped(.async_io);
+pub const FreeQueue = Queue(Task, .queue);
+pub const SubmissionQueue = Queue(Task, .queue);
 
 pub const AsyncIo = struct {
     gpa: Allocator,
     backend: IOUringBackend,
-    completion_q: CompletionQueue = .{},
     submission_q: SubmissionQueue = .{},
     free_q: FreeQueue = .{},
+    pending_submissions: SubmissionQueue = .{}, // For tasks not submitted due to SQ full
 
     pub fn init(gpa: Allocator, entries: u16) !AsyncIo {
         if (builtin.os.tag != .linux) {
@@ -53,28 +52,64 @@ pub const AsyncIo = struct {
             .backend = try IOUringBackend.init(entries),
             .submission_q = .{},
             .free_q = .{},
+            .pending_submissions = .{},
         };
     }
 
     pub fn deinit(self: *AsyncIo) void {
-        self.backend.deinit(self.gpa);
         while (self.submission_q.pop()) |task| {
-            std.log.debug("Deinit: destroying submission_q task={*}", .{task});
+            log.debug("Deinit: destroying submission_q task={*}", .{task});
+            self.gpa.destroy(task);
+        }
+        while (self.pending_submissions.pop()) |task| {
+            log.debug("Deinit: destroying pending_submissions task={*}", .{task});
             self.gpa.destroy(task);
         }
         while (self.free_q.pop()) |task| {
-            std.log.debug("Deinit: destroying free_q task={*}", .{task});
+            log.debug("Deinit: destroying free_q task={*}", .{task});
             self.gpa.destroy(task);
         }
+        while (self.backend.in_flight.pop()) |task| {
+            log.debug("Deinit: destroying in_flight task={*}", .{task});
+            self.gpa.destroy(task);
+        }
+        self.backend.deinit(self.gpa);
     }
 
     pub fn submit(self: *AsyncIo) !void {
-        try self.backend.submit(&self.submission_q);
+        while (self.pending_submissions.pop()) |task| {
+            self.submission_q.push(task);
+        }
+
+        const initial_len = self.submission_q.len;
+        const prepped = try self.backend.submit(&self.submission_q);
+        if (prepped < initial_len) {
+            while (self.submission_q.pop()) |task| {
+                self.pending_submissions.push(task);
+            }
+            log.warn("Queued {}/{} tasks to pending_submissions", .{ initial_len - prepped, initial_len });
+        }
         try self.reapCompletions();
     }
 
-    pub fn getTask(self: *AsyncIo) Allocator.Error!*Task {
-        const task = self.free_q.pop() orelse try self.gpa.create(Task);
+    pub fn submitAndWait(self: *AsyncIo) !void {
+        while (self.pending_submissions.pop()) |task| {
+            self.submission_q.push(task);
+        }
+
+        const initial_len = self.submission_q.len();
+        const prepped = try self.backend.submitAndWait(&self.submission_q);
+        if (prepped < initial_len) {
+            while (self.submission_q.pop()) |task| {
+                self.pending_submissions.push(task);
+            }
+            log.warn("Queued {}/{} tasks to pending_submissions", .{ initial_len - prepped, initial_len });
+        }
+        try self.reapCompletions();
+    }
+
+    /// Resets a task to its initial state for reuse.
+    pub fn resetTask(_: *AsyncIo, task: *Task) void {
         task.* = .{
             .userdata = null,
             .msg = 0,
@@ -82,16 +117,25 @@ pub const AsyncIo = struct {
             .req = .noop,
             .result = null,
             .state = .free,
-            .next = null,
-            .prev = null,
+            .queue = .{},
         };
-        std.log.debug("Task acquired (ptr: {*}, req: {s})", .{ task, @tagName(task.req) });
-        return task;
+        log.debug("Task reset (ptr: {*})", .{task});
     }
 
-    pub fn submitAndWait(self: *AsyncIo) !void {
-        try self.backend.submitAndWait(&self.submission_q);
-        try self.reapCompletions();
+    pub fn getTask(self: *AsyncIo) error{ OutOfMemory, TaskReuseError }!*Task {
+        const task = self.free_q.pop() orelse blk: {
+            const task = try self.gpa.create(Task);
+            self.resetTask(task);
+            log.debug("Allocated new task (ptr: {*})", .{task});
+            break :blk task;
+        };
+        if (task.userdata != null) {
+            std.log.err("Task reused with non-null userdata: {x}", .{@intFromPtr(task.userdata)});
+            return error.TaskReuseError;
+        }
+        self.resetTask(task);
+        log.debug("Task acquired (ptr: {*}, req: {s})", .{ task, @tagName(task.req) });
+        return task;
     }
 
     pub fn reapCompletions(self: *AsyncIo) !void {
@@ -106,7 +150,7 @@ pub const AsyncIo = struct {
         return self.backend.pollableFd();
     }
 
-    pub fn noop(self: *AsyncIo, ctx: Context) Allocator.Error!*Task {
+    pub fn noop(self: *AsyncIo, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -118,7 +162,7 @@ pub const AsyncIo = struct {
         return task;
     }
 
-    pub fn accept(self: *AsyncIo, fd: posix.fd_t, ctx: Context) Allocator.Error!*Task {
+    pub fn accept(self: *AsyncIo, fd: posix.fd_t, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -130,7 +174,7 @@ pub const AsyncIo = struct {
         return task;
     }
 
-    pub fn recv(self: *AsyncIo, fd: posix.fd_t, buffer: []u8, ctx: Context) Allocator.Error!*Task {
+    pub fn recv(self: *AsyncIo, fd: posix.fd_t, buffer: []u8, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -142,7 +186,7 @@ pub const AsyncIo = struct {
         return task;
     }
 
-    pub fn write(self: *AsyncIo, fd: posix.fd_t, buffer: []const u8, ctx: Context) Allocator.Error!*Task {
+    pub fn write(self: *AsyncIo, fd: posix.fd_t, buffer: []const u8, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -154,7 +198,7 @@ pub const AsyncIo = struct {
         return task;
     }
 
-    pub fn writev(self: *AsyncIo, fd: posix.fd_t, vecs: []const posix.iovec_const, ctx: Context) Allocator.Error!*Task {
+    pub fn writev(self: *AsyncIo, fd: posix.fd_t, vecs: []const posix.iovec_const, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -166,7 +210,7 @@ pub const AsyncIo = struct {
         return task;
     }
 
-    pub fn close(self: *AsyncIo, fd: posix.fd_t, ctx: Context) Allocator.Error!*Task {
+    pub fn close(self: *AsyncIo, fd: posix.fd_t, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -178,19 +222,34 @@ pub const AsyncIo = struct {
         return task;
     }
 
-    pub fn timer(self: *AsyncIo, duration: Timespec, ctx: Context) Allocator.Error!*Task {
-        _ = self;
-        _ = duration;
-        _ = ctx;
-        return error.OperationNotImplemented;
+    pub fn timer(self: *AsyncIo, duration: Timespec, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
+        const task = try self.getTask();
+        task.* = .{
+            .userdata = ctx.ptr,
+            .msg = ctx.msg,
+            .callback = ctx.cb,
+            .req = .{ .timer = duration },
+        };
+        self.submission_q.push(task);
+        return task;
     }
 
-    pub fn cancelAll(self: *AsyncIo) Allocator.Error!void {
+    pub fn cancelAll(self: *AsyncIo) error{ OutOfMemory, TaskReuseError }!void {
         const task = try self.getTask();
         task.* = .{
             .req = .{ .cancel = .all },
+            .callback = cancelAllCallback,
         };
-
         self.submission_q.push(task);
+    }
+
+    fn cancelAllCallback(_: *AsyncIo, task: *Task) anyerror!void {
+        if (task.result) |res| {
+            _ = res.cancel catch |err| {
+                log.err("cancelAll failed: {s}", .{@errorName(err)});
+                return err;
+            };
+            log.debug("cancelAll completed successfully", .{});
+        }
     }
 };

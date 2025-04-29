@@ -212,7 +212,7 @@ pub fn ws(wsk: *zttp.WebSocket, message: []const u8, ctx: *zttp.Context, async_c
     std.log.debug("ws: Entering for wsk={*}, message_len={d}", .{ wsk, message.len });
     if (ServerState.instance == null) {
         std.log.err("ws: WebSocket module not initialized", .{});
-        wsk.close();
+        wsk.close(async_ctx);
         std.log.debug("ws: Closed wsk={*} due to uninitialized state", .{wsk});
         return;
     }
@@ -223,7 +223,7 @@ pub fn ws(wsk: *zttp.WebSocket, message: []const u8, ctx: *zttp.Context, async_c
     // Limit to 8 clients to prevent thread exhaustion
     if (ServerState.getClientCount() >= 8 and !ServerState.instance.?.clients.contains(client_id)) {
         std.log.debug("ws: Rejecting client {d} due to client limit (8)", .{client_id});
-        wsk.close();
+        wsk.close(async_ctx);
         std.log.debug("ws: Closed wsk={*} due to client limit", .{wsk});
         return;
     }
@@ -275,7 +275,7 @@ pub fn ws(wsk: *zttp.WebSocket, message: []const u8, ctx: *zttp.Context, async_c
             username = std.fmt.bufPrint(&buf, "Guest_{d}", .{client_id}) catch "Guest";
             username = allocator.dupe(u8, username) catch {
                 std.log.err("ws: Failed to allocate username for client {d}", .{client_id});
-                wsk.close();
+                wsk.close(async_ctx);
                 std.log.debug("ws: Closed wsk={*} due to allocation failure", .{wsk});
                 return;
             };
@@ -287,7 +287,7 @@ pub fn ws(wsk: *zttp.WebSocket, message: []const u8, ctx: *zttp.Context, async_c
         _ = ServerState.addClient(wsk, username) catch |err| {
             std.log.err("ws: Failed to add client {d}: {any}", .{ client_id, err });
             if (username_owned) allocator.free(username);
-            wsk.close();
+            wsk.close(async_ctx);
             std.log.debug("ws: Closed wsk={*} due to addClient error", .{wsk});
             return;
         };

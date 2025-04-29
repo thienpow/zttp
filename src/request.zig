@@ -1,7 +1,18 @@
 // src/request.zig
 const std = @import("std");
-const HttpMethod = @import("zttp.zig").HttpMethod;
+
 const cookie = @import("cookie.zig");
+
+pub const HttpMethod = enum {
+    get,
+    post,
+    put,
+    delete,
+    patch,
+    head,
+    options,
+    trace,
+};
 
 /// Custom error set for request parsing.
 const RequestError = error{

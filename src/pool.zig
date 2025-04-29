@@ -173,9 +173,9 @@ pub const ThreadPool = struct {
     }
 
     /// Initialize a new thread pool without starting threads
-    pub fn init(allocator: Allocator, options: Options) !ThreadPool {
+    pub fn init(allocator: Allocator) !ThreadPool {
         //std.debug.print("ThreadPool.init: Starting at {d} ns\n", .{std.time.nanoTimestamp()});
-        const threads = try allocator.alloc(std.Thread, options.max_threads);
+        const threads = try allocator.alloc(std.Thread, 8);
         const tasks = std.PriorityQueue(*Task, void, compareTaskPriority).init(allocator, {});
         const all_tasks = std.AutoHashMap(u64, TaskStatus).init(allocator);
         const pending_tasks = std.AutoHashMap(u64, *Task).init(allocator);
@@ -188,13 +188,13 @@ pub const ThreadPool = struct {
             .pending_tasks = pending_tasks,
             .mutex = std.Thread.Mutex{},
             .cond = std.Thread.Condition{},
-            .min_threads = options.min_threads,
-            .max_threads = options.max_threads,
-            .max_tasks = options.max_tasks,
+            .min_threads = 8,
+            .max_threads = 16,
+            .max_tasks = 256,
             .active_threads = std.atomic.Value(usize).init(0),
             .spawned_threads = 0,
             .next_task_id = std.atomic.Value(u64).init(0),
-            .options = options,
+            .options = Options{},
         };
     }
 

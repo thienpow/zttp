@@ -3,6 +3,7 @@ const std = @import("std");
 
 pub const Middleware = @import("middleware/mod.zig");
 pub const Request = @import("request.zig").Request;
+pub const HttpMethod = @import("request.zig").HttpMethod;
 pub const Response = @import("response.zig").Response;
 pub const Context = @import("context.zig").Context;
 pub const WebSocket = @import("websocket.zig").WebSocket;
@@ -19,17 +20,6 @@ const Router = router.Router;
 pub const WebSocketHandlerFn = router.WebSocketHandlerFn;
 
 const cache = @import("template/cache.zig");
-
-pub const HttpMethod = enum {
-    get,
-    post,
-    put,
-    delete,
-    patch,
-    head,
-    options,
-    trace,
-};
 
 pub const LogLevel = enum {
     debug,
@@ -55,28 +45,28 @@ pub fn createServer(
     allocator: std.mem.Allocator,
     server_options: Server.Options,
 ) !*ServerBundle {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    const alloc = arena.allocator();
+    //var arena = std.heap.ArenaAllocator.init(allocator);
+    //const alloc = arena.allocator();
 
-    var pool = try alloc.create(ThreadPool);
-    pool.* = try ThreadPool.init(allocator, server_options.thread_pool_options);
+    var pool = try allocator.create(ThreadPool);
+    pool.* = try ThreadPool.init(allocator);
     errdefer {
         pool.deinit();
-        alloc.destroy(pool);
+        allocator.destroy(pool);
     }
 
-    try pool.startWorkers(server_options.thread_pool_options.min_threads);
+    try pool.startWorkers(8);
 
-    var server = try alloc.create(Server);
-    server.* = try Server.init(allocator, server_options, pool);
+    var server = try allocator.create(Server);
+    server.* = try Server.init(allocator, server_options);
     errdefer {
         server.deinit();
-        alloc.destroy(server);
+        allocator.destroy(server);
     }
 
-    const bundle = try alloc.create(ServerBundle);
+    const bundle = try allocator.create(ServerBundle);
     bundle.* = ServerBundle{
-        .arena = arena,
+        .allocator = allocator,
         .server = server,
         .pool = pool,
         .server_options = server_options,
@@ -86,7 +76,7 @@ pub fn createServer(
 }
 
 pub const ServerBundle = struct {
-    arena: std.heap.ArenaAllocator,
+    allocator: std.mem.Allocator,
     server: *Server,
     pool: *ThreadPool,
     server_options: Server.Options,
@@ -107,7 +97,6 @@ pub const ServerBundle = struct {
     pub fn deinit(self: *ServerBundle) void {
         self.server.deinit();
         self.pool.deinit();
-        self.arena.deinit();
     }
 
     pub fn route(self: *ServerBundle, method: HttpMethod, path: []const u8, handler: HandlerFn) !void {
@@ -119,7 +108,7 @@ pub const ServerBundle = struct {
     }
 
     pub fn loadRoutes(self: *ServerBundle, comptime getRoutesFn: fn (std.mem.Allocator) anyerror![]const Route) !void {
-        const routes = try getRoutesFn(self.arena.allocator());
+        const routes = try getRoutesFn(self.allocator);
         if (routes.len == 0) {
             std.log.warn("No routes loaded", .{});
         }
@@ -130,13 +119,13 @@ pub const ServerBundle = struct {
     }
 
     pub fn loadTemplates(self: *ServerBundle, comptime getTemplatesFn: fn (std.mem.Allocator) anyerror![]const Template) !void {
-        const templates = try getTemplatesFn(self.arena.allocator());
+        const templates = try getTemplatesFn(self.allocator);
 
         if (templates.len == 0) {
             std.log.warn("No templates loaded", .{});
         }
 
-        try cache.initTemplateCache(self.arena.allocator(), @intCast(templates.len));
+        try cache.initTemplateCache(self.allocator, @intCast(templates.len));
 
         for (templates) |t| {
             _ = try cache.putTokenizedTemplate(t.name, t.buffer);

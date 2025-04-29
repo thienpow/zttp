@@ -135,14 +135,13 @@ pub fn static(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Re
     };
 
     // Set response headers and body
-    res.headers.put("Content-Type", getContentType(file_path)) catch |err| {
+    res.status = @enumFromInt(200); // OK
+    res.body = file_content; // Transfer ownership to res.body
+    res.setHeader("Content-Type", getContentType(file_path)) catch |err| {
         std.log.warn("Failed to set Content-Type: {}", .{err});
         res.allocator.free(file_content); // Clean up on error
         res.status = @enumFromInt(500); // Internal Server Error
         res.body = "Internal Server Error";
         return;
     };
-
-    res.status = @enumFromInt(200); // OK
-    res.body = file_content; // Transfer ownership to res.body
 }

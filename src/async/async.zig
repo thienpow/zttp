@@ -5,7 +5,12 @@ const Allocator = std.mem.Allocator;
 const posix = std.posix;
 
 pub const Queue = @import("queue.zig").Intrusive;
-pub const IOUringBackend = @import("io_uring.zig").IOUringBackend;
+pub const Backend = if (builtin.os.tag == .linux)
+    @import("io_uring.zig").IOUringBackend
+else if (builtin.os.tag == .macos or builtin.os.tag == .freebsd or builtin.os.tag == .netbsd or builtin.os.tag == .openbsd or builtin.os.tag == .dragonfly)
+    @import("kqueue.zig").KqueueBackend
+else
+    @compileError("No async backend available for this platform");
 pub const Task = @import("task.zig").Task;
 pub const OperationType = @import("op_request.zig").OperationType;
 pub const Request = @import("op_request.zig").Request;
@@ -38,18 +43,15 @@ pub const SubmissionQueue = Queue(Task, .queue);
 
 pub const AsyncIo = struct {
     gpa: Allocator,
-    backend: IOUringBackend,
+    backend: Backend,
     submission_q: SubmissionQueue = .{},
     free_q: FreeQueue = .{},
-    pending_submissions: SubmissionQueue = .{}, // For tasks not submitted due to SQ full
+    pending_submissions: SubmissionQueue = .{}, // For tasks not submitted due to backend constraints
 
     pub fn init(gpa: Allocator, entries: u16) !AsyncIo {
-        if (builtin.os.tag != .linux) {
-            @compileError("zttp async backend (io_uring) only supports Linux");
-        }
         return .{
             .gpa = gpa,
-            .backend = try IOUringBackend.init(entries),
+            .backend = try Backend.init(entries),
             .submission_q = .{},
             .free_q = .{},
             .pending_submissions = .{},

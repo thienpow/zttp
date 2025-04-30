@@ -124,7 +124,7 @@
         <div class="accordion">
             <div class="accordion-header">WebSocket Chat</div>
             <div class="accordion-content">
-                <h3><a href="/demos/websocket/chat" hx-target="main" hx-boost="true">WebSocket Chat</a></h3>
+                <h3>WebSocket Chat</h3>
                 <p>A real-time chat application using ZTTP WebSockets and HTMX, demonstrating live message broadcasting between multiple clients.</p>
                 <p>Location: <code>/demos/websocket/chat</code></p>
                 <p>Try opening the chat as different users in separate browsers:</p>

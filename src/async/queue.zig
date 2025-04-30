@@ -1,4 +1,4 @@
-// zttp/src/async/queue.zig
+// src/async/queue.zig
 const std = @import("std");
 const assert = std.debug.assert;
 

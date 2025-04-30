@@ -55,7 +55,7 @@ fn evaluateCondition(allocator: std.mem.Allocator, ctx: *Context, condition: Con
         .non_empty => |var_name| {
             const val = ctx.get(var_name);
             const result = val != null and val.?.len > 0;
-            std.debug.print("Evaluating non_empty for '{s}': value={?s}, result={}\n", .{ var_name, val, result });
+
             return result;
         },
         .equals => |eq| {
@@ -100,13 +100,11 @@ fn evaluateCondition(allocator: std.mem.Allocator, ctx: *Context, condition: Con
 fn parseSetOperand(inner_ctx: *Context, operand_str: []const u8) !isize {
     const trimmed_op = std.mem.trim(u8, operand_str, " \t");
     if (inner_ctx.get(trimmed_op)) |val_str| {
-        return std.fmt.parseInt(isize, val_str, 10) catch |err| {
-            std.debug.print("Set Error: Failed to parse variable '{s}' ('{s}') as int for arithmetic: {any}\n", .{ trimmed_op, val_str, err });
+        return std.fmt.parseInt(isize, val_str, 10) catch {
             return TemplateError.ParseIntError;
         };
     } else {
-        return std.fmt.parseInt(isize, trimmed_op, 10) catch |err| {
-            std.debug.print("Set Error: Failed to parse literal '{s}' as int for arithmetic: {any}\n", .{ trimmed_op, err });
+        return std.fmt.parseInt(isize, trimmed_op, 10) catch {
             return TemplateError.ParseIntError;
         };
     }

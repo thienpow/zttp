@@ -4,6 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background-color: #e9ecef; }
         .profile-container { display: flex; min-height: 100vh; }
@@ -23,11 +24,9 @@
             <h3>Profile Menu</h3>
              <nav>
                 <ul>
-                    <li><a href="/demos/profile">Dashboard</a></li>
-                    <li><a href="/demos/profile/settings">Settings (Link Example)</a></li>
-                    <li><a href="/demos/profile/messages">Messages (Link Example)</a></li>
+                    <li><a href="/demos/profile" hx-target="main" hx-boost="true">Dashboard</a></li>
+                    <li><a href="/demos/users/123" hx-target="main" hx-boost="true"><code>/demos/users/123</code></a></li>
                     <li><hr style="border-color: #495057;"></li>
-                    <li><a href="/">Back to Main Site</a></li>
                     <li><a href="/demos/logout">Logout</a></li>
                 </ul>
             </nav>

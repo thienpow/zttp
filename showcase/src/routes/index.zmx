@@ -213,11 +213,7 @@
         <h2>Explore the Showcase</h2>
         <p>Dive deeper by exploring the sections in the navigation menu:</p>
         <ul>
-            <li>Learn <a href="/why" hx-target="main" hx-boost="true">Why ZTTP?</a> was created.</li>
-            <li>Understand the <a href="/concepts" hx-target="main" hx-boost="true">Core Concepts</a> behind the framework.</li>
             <li>See <a href="/demos" hx-target="main" hx-boost="true">Live Demos</a> of ZTTP and HTMX in action.</li>
-            <li>Follow the <a href="/getting-started" hx-target="main" hx-boost="true">Get Started</a> guide.</li>
-            <li>Consult the <a href="/docs" hx-target="main" hx-boost="true">API Docs</a> for technical details.</li>
         </ul>
 
         #if logged_in == "true"

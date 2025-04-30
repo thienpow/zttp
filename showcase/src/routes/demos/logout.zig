@@ -11,8 +11,8 @@ pub fn get(_: *Request, res: *Response, _: *Context) void {
 
     // Manually set redirect headers and status
     // Use .see_other now that it's defined in the enum
-    res.status = .see_other; // HTTP 303 See Other
-    res.setHeader("Location", "/") catch |err| {
+    res.status = .found; // HTTP 302
+    res.setHeader("HX-Redirect", "/?logged_in=false") catch |err| {
         // Fallback if redirect fails
         std.log.err("Failed to set Location header for redirect after logout: {any}", .{err});
         res.status = .internal_server_error;
@@ -23,6 +23,11 @@ pub fn get(_: *Request, res: *Response, _: *Context) void {
         return; // Exit after setting error response
     };
 
-    // Optionally set a minimal body for clients that don't follow redirects, though often not needed.
-    // res.setBody("Redirecting...") catch {}; // Usually not necessary
+    // if hx-redirect not available
+    res.setHeader("Location", "/?logged_in=false") catch |err| {
+        std.log.err("Failed to set Location header: {any}", .{err});
+        // Continue, as HX-Redirect is already set
+    };
+
+    res.setBody("Redirecting...") catch {};
 }

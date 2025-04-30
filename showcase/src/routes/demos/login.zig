@@ -42,10 +42,11 @@ pub fn post(req: *Request, res: *Response, ctx: *Context) void {
                 if (std.mem.eql(u8, p, "password")) {
                     // --- Login Success ---
                     std.log.info("Simulated login success for user: {s}", .{u});
+                    ctx.set("logged_in", "true") catch {};
                     // Redirect to homepage after successful login
                     // Use .see_other now that it's defined in the enum
-                    res.status = .see_other; // HTTP 303 See Other
-                    res.setHeader("Location", "/") catch |err| {
+                    res.status = .found; // HTTP 302
+                    res.setHeader("Location", "/?logged_in=true") catch |err| {
                         // Fallback if setting header fails
                         std.log.err("Failed to set Location header for redirect after login: {any}", .{err});
                         res.status = .internal_server_error;

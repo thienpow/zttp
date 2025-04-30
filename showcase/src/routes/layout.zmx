@@ -181,15 +181,11 @@
                  <ul>
                     <!-- Use hx-boost and hx-target for SPA-like navigation within the showcase -->
                     <li><a href="/" hx-target="main" hx-boost="true">Home</a></li>
-                    <li><a href="/why" hx-target="main" hx-boost="true">Why ZTTP?</a></li>
-                    <li><a href="/concepts" hx-target="main" hx-boost="true">Core Concepts</a></li>
                     <li><a href="/demos" hx-target="main" hx-boost="true">Live Demos</a></li>
-                    <li><a href="/getting-started" hx-target="main" hx-boost="true">Get Started</a></li>
-                    <li><a href="/docs" hx-target="main" hx-boost="true">API Docs</a></li>
                     <!-- Example Auth Links (Keep if relevant for demos) -->
                     #if logged_in == "true"
-                        <li><a href="/profile" hx-target="main" hx-boost="true">Profile ({{ username }})</a></li>
-                        <li><a href="/logout" hx-target="main" hx-boost="true">Logout</a></li>
+                        <li><a href="/demos/profile" hx-target="body" hx-boost="false">Profile ({{ username }})</a></li>
+                        <li><a href="/demos/logout" hx-target="main" hx-boost="true">Logout</a></li>
                     #else
                         <!-- Maybe link to an auth demo instead of top-level login? -->
                         <!-- <li><a href="/login" hx-target="main" hx-boost="true">Login</a></li> -->

@@ -8,6 +8,8 @@ const AsyncIo = @import("async/async.zig").AsyncIo;
 const AsyncContext = @import("async/async.zig").Context;
 const Task = @import("async/task.zig").Task;
 
+const log = std.log.scoped(.websocket);
+
 /// WebSocket connection over a socket, using async I/O.
 pub const WebSocket = struct {
     socket: std.posix.fd_t,
@@ -23,7 +25,7 @@ pub const WebSocket = struct {
 
     /// Initializes a WebSocket over the given socket.
     pub fn init(socket: std.posix.fd_t, allocator: Allocator, options: Options, async_io: *AsyncIo) WebSocket {
-        std.log.debug("WebSocket.init: FD: {d}", .{socket});
+        log.debug("WebSocket.init: FD: {d}", .{socket});
         return .{
             .socket = socket,
             .allocator = allocator,
@@ -35,28 +37,28 @@ pub const WebSocket = struct {
 
     /// Deinitializes the WebSocket, freeing resources.
     pub fn deinit(self: *WebSocket) void {
-        std.log.debug("WebSocket.deinit: FD: {d}", .{self.socket});
+        log.debug("WebSocket.deinit: FD: {d}", .{self.socket});
         // No dynamic resources to free in WebSocket struct
     }
 
     /// Schedules an async read into the buffer.
     pub fn readAsync(self: *WebSocket, buffer: []u8, ctx: AsyncContext) !void {
         if (!self.is_open) {
-            std.log.err("Attempted to read from closed WebSocket (FD: {d})", .{self.socket});
+            log.err("Attempted to read from closed WebSocket (FD: {d})", .{self.socket});
             return error.WebSocketClosed;
         }
         if (self.socket <= 0) {
-            std.log.err("Invalid socket FD: {d}", .{self.socket});
+            log.err("Invalid socket FD: {d}", .{self.socket});
             return error.InvalidSocket;
         }
-        std.log.debug("Scheduling recv for FD: {d}, buffer size: {d}", .{ self.socket, buffer.len });
+        log.debug("Scheduling recv for FD: {d}, buffer size: {d}", .{ self.socket, buffer.len });
         _ = try self.async_io.recv(self.socket, buffer, ctx);
     }
 
     /// Sends a WebSocket frame asynchronously.
     pub fn sendFrameAsync(self: *WebSocket, opcode: u8, payload: []const u8, ctx: AsyncContext) !void {
         if (!self.is_open) {
-            std.log.debug("Attempted to send frame on closed WebSocket (FD: {d})", .{self.socket});
+            log.debug("Attempted to send frame on closed WebSocket (FD: {d})", .{self.socket});
             return error.WebSocketClosed;
         }
 
@@ -80,11 +82,11 @@ pub const WebSocket = struct {
         // Payload
         try frame.appendSlice(payload);
 
-        std.log.debug("Sending frame (FD: {d}, opcode: {x}, payload_len: {d}): {x}", .{
+        log.debug("Sending frame (FD: {d}, opcode: {x}, payload_len: {d}): {x}", .{
             self.socket, opcode, payload.len, frame.items,
         });
         if (opcode == 0x1) {
-            std.log.debug("Sending payload as string (FD: {d}): {s}", .{ self.socket, payload });
+            log.debug("Sending payload as string (FD: {d}): {s}", .{ self.socket, payload });
         }
 
         const frame_data = try self.allocator.dupe(u8, frame.items);
@@ -101,16 +103,16 @@ pub const WebSocket = struct {
     /// Marks the WebSocket as closed and submits an async close task.
     pub fn close(self: *WebSocket, ctx: AsyncContext) void {
         if (!self.is_open) {
-            std.log.debug("WebSocket already closed (FD: {d})", .{self.socket});
+            log.debug("WebSocket already closed (FD: {d})", .{self.socket});
             return;
         }
 
-        std.log.debug("Initiating async close for WebSocket (FD: {d})", .{self.socket});
+        log.debug("Initiating async close for WebSocket (FD: {d})", .{self.socket});
         self.is_open = false;
 
         if (self.socket > 0) {
             _ = self.async_io.close(self.socket, ctx) catch |err| {
-                std.log.err("Failed to submit async close for FD: {d}: {any}", .{ self.socket, err });
+                log.err("Failed to submit async close for FD: {d}: {any}", .{ self.socket, err });
             };
         }
     }
@@ -167,14 +169,14 @@ pub const WebSocketConnection = struct {
             .header_size = 2,
         };
 
-        std.log.debug("WebSocketConnection.init: FD: {d}", .{ws.socket});
+        log.debug("WebSocketConnection.init: FD: {d}", .{ws.socket});
         try conn.readNext();
         return conn;
     }
 
     /// Deinitializes the connection, freeing resources.
     pub fn deinit(self: *WebSocketConnection) void {
-        std.log.debug("WebSocketConnection.deinit: FD: {d}", .{self.ws.socket});
+        log.debug("WebSocketConnection.deinit: FD: {d}", .{self.ws.socket});
         self.frame_buffer.deinit();
         self.payload_buffer.deinit();
         self.ws.deinit();
@@ -189,14 +191,14 @@ pub const WebSocketConnection = struct {
     /// Schedules the next async read based on the current state.
     fn readNext(self: *WebSocketConnection) !void {
         if (!self.ws.is_open or self.state == .closed) {
-            std.log.debug("Skipping readNext on closed WebSocket (FD: {d}, state: {s})", .{
+            log.debug("Skipping readNext on closed WebSocket (FD: {d}, state: {s})", .{
                 self.ws.socket, @tagName(self.state),
             });
             return;
         }
 
         if (self.ws.socket <= 0) {
-            std.log.err("Invalid socket FD: {d}", .{self.ws.socket});
+            log.err("Invalid socket FD: {d}", .{self.ws.socket});
             self.state = .closed;
             return error.InvalidSocket;
         }
@@ -217,16 +219,16 @@ pub const WebSocketConnection = struct {
             .req = .{ .recv = .{ .fd = self.ws.socket, .buffer = buf } },
         };
         self.ws.async_io.submission_q.push(task);
-        std.log.debug("Task allocated for readNext (ptr: {*}, FD: {d}, state: {s}, buffer_size: {d}, buf_ptr: {*})", .{
+        log.debug("Task allocated for readNext (ptr: {*}, FD: {d}, state: {s}, buffer_size: {d}, buf_ptr: {*})", .{
             task, self.ws.socket, @tagName(self.state), buffer_size, buf.ptr,
         });
     }
 
     /// Sends a protocol error close frame and initiates async close.
     fn sendProtocolError(self: *WebSocketConnection, msg: []const u8) !void {
-        std.log.warn("{s} on FD: {d}", .{ msg, self.ws.socket });
+        log.warn("{s} on FD: {d}", .{ msg, self.ws.socket });
         if (!self.ws.is_open or self.state == .closed) {
-            std.log.debug("Skipping protocol error send on closed WebSocket (FD: {d})", .{self.ws.socket});
+            log.debug("Skipping protocol error send on closed WebSocket (FD: {d})", .{self.ws.socket});
             return;
         }
 
@@ -247,11 +249,11 @@ pub const WebSocketConnection = struct {
 
     /// Sends a message too big close frame and initiates async close.
     fn sendMessageTooBig(self: *WebSocketConnection) !void {
-        std.log.warn("Payload length ({d}) exceeds max_payload_size ({d}) on FD: {d}", .{
+        log.warn("Payload length ({d}) exceeds max_payload_size ({d}) on FD: {d}", .{
             self.payload_len, self.ws.options.max_payload_size, self.ws.socket,
         });
         if (!self.ws.is_open or self.state == .closed) {
-            std.log.debug("Skipping message too big send on closed WebSocket (FD: {d})", .{self.ws.socket});
+            log.debug("Skipping message too big send on closed WebSocket (FD: {d})", .{self.ws.socket});
             return;
         }
 
@@ -277,7 +279,7 @@ pub const WebSocketConnection = struct {
         const rsv_bits = (frame[0] >> 4) & 0x07;
         self.opcode = frame[0] & 0x0F;
 
-        std.log.debug("Processing frame (FD: {d}, opcode: {x}, fin: {d}, payload_len: {d})", .{
+        log.debug("Processing frame (FD: {d}, opcode: {x}, fin: {d}, payload_len: {d})", .{
             self.ws.socket, self.opcode, @intFromBool(self.fin), self.payload_len,
         });
 
@@ -302,10 +304,10 @@ pub const WebSocketConnection = struct {
             }
         }
 
-        std.log.debug("Unmasked payload (FD: {d}): {x}", .{ self.ws.socket, self.payload_buffer.items });
+        log.debug("Unmasked payload (FD: {d}): {x}", .{ self.ws.socket, self.payload_buffer.items });
         if (self.opcode == 0x1) {
-            std.log.debug("Unmasked payload as string (FD: {d}): {s}", .{ self.ws.socket, self.payload_buffer.items });
-            std.log.info("WS message received: {s}", .{self.payload_buffer.items});
+            log.debug("Unmasked payload as string (FD: {d}): {s}", .{ self.ws.socket, self.payload_buffer.items });
+            log.info("WS message received: {s}", .{self.payload_buffer.items});
         }
 
         const ctx = AsyncContext{
@@ -321,7 +323,7 @@ pub const WebSocketConnection = struct {
 
             switch (self.opcode) {
                 0x8 => { // Close
-                    std.log.info("Close frame received (FD: {d})", .{self.ws.socket});
+                    log.info("Close frame received (FD: {d})", .{self.ws.socket});
                     if (self.ws.is_open and self.state != .closed) {
                         var close_payload = std.ArrayList(u8).init(self.allocator);
                         defer close_payload.deinit();
@@ -348,7 +350,7 @@ pub const WebSocketConnection = struct {
                     }
                 },
                 0xA => { // Pong
-                    std.log.debug("Pong frame received (FD: {d})", .{self.ws.socket});
+                    log.debug("Pong frame received (FD: {d})", .{self.ws.socket});
                     self.state = .reading_header;
                     self.frame_buffer.clearAndFree();
                     self.payload_buffer.clearRetainingCapacity();
@@ -362,7 +364,7 @@ pub const WebSocketConnection = struct {
             }
         } else if (self.opcode == 0x1 or self.opcode == 0x2) { // Data frames
             if (self.opcode == 0x1 and !std.unicode.utf8ValidateSlice(self.payload_buffer.items)) {
-                std.log.warn("Invalid UTF-8 in text frame (FD: {d}): {x}", .{
+                log.warn("Invalid UTF-8 in text frame (FD: {d}): {x}", .{
                     self.ws.socket, self.payload_buffer.items,
                 });
                 var close_payload = std.ArrayList(u8).init(self.allocator);
@@ -377,11 +379,11 @@ pub const WebSocketConnection = struct {
                 return;
             }
 
-            std.log.debug("Calling WebSocket handler for FD: {d}, data: {s}", .{
+            log.debug("Calling WebSocket handler for FD: {d}, data: {s}", .{
                 self.ws.socket, self.payload_buffer.items,
             });
             try self.handler(&self.ws, self.payload_buffer.items, self.ctx, ctx);
-            std.log.debug("WebSocket handler completed for FD: {d}", .{self.ws.socket});
+            log.debug("WebSocket handler completed for FD: {d}", .{self.ws.socket});
 
             self.state = .reading_header;
             self.frame_buffer.clearAndFree();
@@ -403,7 +405,7 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
     const result = task.result orelse return error.NoResult;
 
     const bytes_read = result.recv catch |err| {
-        std.log.err("WebSocket read error (state: {s}, FD: {d}): {any}", .{
+        log.err("WebSocket read error (state: {s}, FD: {d}): {any}", .{
             @tagName(conn.state), conn.ws.socket, err,
         });
         conn.state = .closed;
@@ -419,7 +421,7 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
     };
 
     if (bytes_read == 0) {
-        std.log.info("WebSocket connection closed by peer (FD: {d})", .{conn.ws.socket});
+        log.info("WebSocket connection closed by peer (FD: {d})", .{conn.ws.socket});
         conn.state = .closed;
         if (conn.ws.is_open) {
             conn.ws.close(AsyncContext{
@@ -432,12 +434,12 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
         return;
     }
 
-    std.log.debug("Received {d} bytes (FD: {d}, state: {s}): {x}", .{
+    log.debug("Received {d} bytes (FD: {d}, state: {s}): {x}", .{
         bytes_read, conn.ws.socket, @tagName(conn.state), task.req.recv.buffer[0..bytes_read],
     });
     try conn.frame_buffer.appendSlice(task.req.recv.buffer[0..bytes_read]);
     conn.allocator.free(task.req.recv.buffer);
-    std.log.debug("Full frame buffer (FD: {d}, state: {s}): {x}", .{
+    log.debug("Full frame buffer (FD: {d}, state: {s}): {x}", .{
         conn.ws.socket, @tagName(conn.state), conn.frame_buffer.items,
     });
 
@@ -499,7 +501,7 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
                 const mask_slice = conn.frame_buffer.items[conn.header_size - 4 .. conn.header_size];
                 if (mask_slice.len == 4) {
                     conn.mask_key = mask_slice[0..4].*;
-                    std.log.debug("Mask key (FD: {d}): {x}", .{ conn.ws.socket, conn.mask_key.? });
+                    log.debug("Mask key (FD: {d}): {x}", .{ conn.ws.socket, conn.mask_key.? });
                     conn.state = .reading_payload;
                     try conn.readNext();
                 } else {
@@ -527,7 +529,7 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) anyerror!void {
     const result = task.result orelse return error.NoResult;
 
     const bytes_written = result.write catch |err| {
-        std.log.err("Write error (FD: {d}): {any}", .{ conn.ws.socket, err });
+        log.err("Write error (FD: {d}): {any}", .{ conn.ws.socket, err });
         conn.state = .closed;
         if (conn.ws.is_open) {
             conn.ws.close(AsyncContext{
@@ -538,7 +540,7 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) anyerror!void {
         return;
     };
 
-    std.log.debug("-Done Writing frame to client completed (FD: {d}, bytes: {d})", .{ conn.ws.socket, bytes_written });
+    log.debug("-Done Writing frame to client completed (FD: {d}, bytes: {d})", .{ conn.ws.socket, bytes_written });
     conn.allocator.free(task.req.write.buffer);
     task.userdata = null;
 }
@@ -550,10 +552,10 @@ fn handleCloseCompletion(_: *AsyncIo, task: *Task) anyerror!void {
 
     const socket = conn.ws.socket; // Store socket for logging
     _ = result.close catch |err| {
-        std.log.err("Close error (FD: {d}): {any}", .{ socket, err });
+        log.err("Close error (FD: {d}): {any}", .{ socket, err });
     };
 
-    std.log.debug("Async close completed for FD: {d}", .{socket});
+    log.debug("Async close completed for FD: {d}", .{socket});
     conn.state = .closed;
 
     // Remove WebSocket from server *before* deinit

@@ -1,4 +1,4 @@
-// zttp/examples/src/routes/demo/conditional.zig
+// showcase/src/routes/demo/conditional.zig
 const std = @import("std");
 const zttp = @import("zttp");
 const Request = zttp.Request;

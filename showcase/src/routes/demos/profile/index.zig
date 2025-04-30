@@ -1,4 +1,4 @@
-// zttp/examples/src/routes/profile/index.zig
+// showcase/src/routes/profile/index.zig
 const std = @import("std");
 const zttp = @import("zttp");
 const Request = zttp.Request;

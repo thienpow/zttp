@@ -58,19 +58,15 @@ pub const AsyncIo = struct {
 
     pub fn deinit(self: *AsyncIo) void {
         while (self.submission_q.pop()) |task| {
-            log.debug("Deinit: destroying submission_q task={*}", .{task});
             self.gpa.destroy(task);
         }
         while (self.pending_submissions.pop()) |task| {
-            log.debug("Deinit: destroying pending_submissions task={*}", .{task});
             self.gpa.destroy(task);
         }
         while (self.free_q.pop()) |task| {
-            log.debug("Deinit: destroying free_q task={*}", .{task});
             self.gpa.destroy(task);
         }
         while (self.backend.in_flight.pop()) |task| {
-            log.debug("Deinit: destroying in_flight task={*}", .{task});
             self.gpa.destroy(task);
         }
         self.backend.deinit(self.gpa);
@@ -119,14 +115,12 @@ pub const AsyncIo = struct {
             .state = .free,
             .queue = .{},
         };
-        log.debug("Task reset (ptr: {*})", .{task});
     }
 
     pub fn getTask(self: *AsyncIo) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = self.free_q.pop() orelse blk: {
             const task = try self.gpa.create(Task);
             self.resetTask(task);
-            log.debug("Allocated new task (ptr: {*})", .{task});
             break :blk task;
         };
         if (task.userdata != null) {
@@ -134,7 +128,6 @@ pub const AsyncIo = struct {
             return error.TaskReuseError;
         }
         self.resetTask(task);
-        log.debug("Task acquired (ptr: {*}, req: {s})", .{ task, @tagName(task.req) });
         return task;
     }
 
@@ -249,7 +242,6 @@ pub const AsyncIo = struct {
                 log.err("cancelAll failed: {s}", .{@errorName(err)});
                 return err;
             };
-            log.debug("cancelAll completed successfully", .{});
         }
     }
 };

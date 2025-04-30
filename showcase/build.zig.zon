@@ -1,7 +1,7 @@
 .{
-    .name = .hello,
+    .name = .zttp_showcase,
     .version = "0.1.0",
-    .fingerprint = 0x3610a68681b9469c,
+    .fingerprint = 0xcc509f5c0f72c247,
     .dependencies = .{
         .zttp = .{
             .path = "../",

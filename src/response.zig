@@ -3,6 +3,8 @@ const std = @import("std");
 const Request = @import("request.zig").Request;
 const cookie = @import("cookie.zig");
 
+const log = std.log.scoped(.response);
+
 /// Errors related to response construction and sending.
 const ResponseError = error{
     InvalidHeaderName,
@@ -24,7 +26,6 @@ pub const Response = struct {
 
     /// Initializes a new response with default values using the provided allocator.
     pub fn init(allocator: std.mem.Allocator) Response {
-        std.log.debug("Response.init with allocator: {any}", .{allocator});
         return .{
             .allocator = allocator,
             .status = .ok,
@@ -45,18 +46,11 @@ pub const Response = struct {
             self.allocator.free(entry.value_ptr.*);
         }
         self.headers.deinit();
-        std.log.debug("Response.deinit: freed body and headers", .{});
     }
 
     /// Sets a header with the given name and value. Overwrites existing header.
     pub fn setHeader(self: *Response, name: []const u8, value: []const u8) !void {
         try validateHeaderName(name);
-        std.log.debug("setHeader: before, name={s}, value={s}, body_len={d}, body_ptr={x}", .{
-            name,
-            value,
-            if (self.body) |b| b.len else 0,
-            if (self.body) |b| @intFromPtr(b.ptr) else 0,
-        });
 
         // Check if header exists and free old key/value
         if (self.headers.getEntry(name)) |entry| {
@@ -70,13 +64,6 @@ pub const Response = struct {
         const value_copy = try self.allocator.dupe(u8, value);
         errdefer self.allocator.free(value_copy);
         try self.headers.put(key_copy, value_copy);
-
-        std.log.debug("setHeader: after, name={s}, value={s}, body_len={d}, body_ptr={x}", .{
-            name,
-            value,
-            if (self.body) |b| b.len else 0,
-            if (self.body) |b| @intFromPtr(b.ptr) else 0,
-        });
     }
 
     /// Sets the response body. Copies body_data; caller can free it.
@@ -85,7 +72,6 @@ pub const Response = struct {
             self.allocator.free(b);
         }
         self.body = try self.allocator.dupe(u8, body_data);
-        std.log.debug("setBody: body_len={d}, body_ptr={x}", .{ self.body.?.len, @intFromPtr(self.body.?.ptr) });
     }
 
     /// Sets the response body to a JSON-serialized value. Sets Content-Type to application/json.
@@ -132,7 +118,7 @@ pub const Response = struct {
     /// Sets the response for a WebSocket handshake (101 Switching Protocols).
     pub fn setWebSocketHandshake(self: *Response, ws_key: []const u8) !void {
         self.status = .switching_protocols;
-        std.log.debug("setWebSocketHandshake: ws_key={s}", .{ws_key});
+
         try self.setHeader("Upgrade", "websocket");
 
         const magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -159,7 +145,6 @@ pub const Response = struct {
         try writeHeaders(self, buffer.writer(), request, self.allocator);
         try buffer.writer().writeAll("\r\n");
         if (self.body) |body| {
-            std.log.debug("send: appending body_len={d}, body_ptr={x}", .{ body.len, @intFromPtr(body.ptr) });
             try buffer.writer().writeAll(body);
         }
 
@@ -175,16 +160,11 @@ pub const Response = struct {
         try writeHeaders(self, buffer.writer(), request, allocator);
         try buffer.writer().writeAll("\r\n");
         if (self.body) |body| {
-            std.log.debug("toBuffer: appending body_len={d}, body_ptr={x}, buffer_len_before={d}", .{
-                body.len,
-                @intFromPtr(body.ptr),
-                buffer.items.len,
-            });
             try buffer.writer().writeAll(body);
         }
 
         const final_buffer = try buffer.toOwnedSlice();
-        std.log.debug("toBuffer: final_buffer_len={d}", .{final_buffer.len});
+
         return final_buffer; // Caller must free
     }
 };

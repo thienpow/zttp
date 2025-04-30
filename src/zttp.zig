@@ -45,9 +45,6 @@ pub fn createServer(
     allocator: std.mem.Allocator,
     server_options: Server.Options,
 ) !*ServerBundle {
-    //var arena = std.heap.ArenaAllocator.init(allocator);
-    //const alloc = arena.allocator();
-
     var pool = try allocator.create(ThreadPool);
     pool.* = try ThreadPool.init(allocator);
     errdefer {

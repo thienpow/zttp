@@ -80,11 +80,9 @@ pub const Server = struct {
 
     pub fn start(self: *Server) !void {
         self.running.store(true, .release);
-        log.info("Server starting on port {d}", .{self.options.port});
 
         // Schedule initial accept
         const listener_fd = self.listener.?.stream.handle;
-        log.debug("Scheduling initial accept for listener FD: {d}", .{listener_fd});
         const accept_task = self.async_io.?.accept(listener_fd, .{
             .ptr = self,
             .cb = handleAcceptCompletion,
@@ -92,12 +90,14 @@ pub const Server = struct {
             log.err("Failed to schedule initial accept: {s}", .{@errorName(err)});
             return err;
         };
-        log.debug("Initial accept task scheduled (ptr: {*})", .{accept_task});
+
+        _ = accept_task;
 
         // Main event loop
         var pollfds = [_]std.posix.pollfd{.{ .fd = try self.async_io.?.pollableFd(), .events = std.posix.POLL.IN, .revents = 0 }};
         const poll_timeout_ms = 10; // Small timeout to reduce CPU usage
 
+        log.info("Server started on port {d}", .{self.options.port});
         while (self.running.load(.acquire) or !self.async_io.?.done()) {
             const ctx = self.async_io.?;
             ctx.submit() catch |err| {
@@ -134,8 +134,6 @@ pub const Server = struct {
         const server: *Server = @ptrCast(@alignCast(task.userdata));
         const result = task.result orelse return error.NoResult;
 
-        log.debug("Handling accept completion, task ptr: {*}, userdata: {x}", .{ task, @intFromPtr(task.userdata) });
-
         const new_fd = result.accept catch |err| {
             log.err("Async accept failed: {}", .{err});
             task.userdata = null; // Clean task before reuse
@@ -163,8 +161,6 @@ pub const Server = struct {
             return;
         }
 
-        log.info("Accepted new connection (FD: {d})", .{new_fd});
-
         const stream = std.net.Stream{ .handle = new_fd };
         const conn = std.net.Server.Connection{
             .stream = stream,
@@ -187,7 +183,6 @@ pub const Server = struct {
         try server.connections.put(new_fd, connection);
 
         task.userdata = null; // Clean task before scheduling next accept
-        log.debug("Cleared task userdata for ptr: {*}, scheduling next accept", .{task});
 
         _ = async_io.accept(server.listener.?.stream.handle, .{
             .ptr = server,

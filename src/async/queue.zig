@@ -57,8 +57,6 @@ pub fn Intrusive(comptime T: type, comptime field: std.meta.FieldEnum(T)) type {
                 self.tail = node;
             }
             self.len += 1;
-
-            log.debug("Pushed node {*}, queue len={}", .{ node, self.len });
         }
 
         /// Pops a node from the front of the queue.
@@ -81,7 +79,6 @@ pub fn Intrusive(comptime T: type, comptime field: std.meta.FieldEnum(T)) type {
             @field(node, @tagName(field)).prev = null;
             self.len -= 1;
 
-            log.debug("Popped node {*}, queue len={}", .{ node, self.len });
             return node;
         }
 
@@ -103,8 +100,6 @@ pub fn Intrusive(comptime T: type, comptime field: std.meta.FieldEnum(T)) type {
                 self.tail = node;
             }
             self.len += 1;
-
-            log.debug("Pushed node {*} to front, queue len={}", .{ node, self.len });
         }
 
         /// Removes a specific node from the queue.
@@ -136,8 +131,6 @@ pub fn Intrusive(comptime T: type, comptime field: std.meta.FieldEnum(T)) type {
             @field(node, @tagName(field)).next = null;
             @field(node, @tagName(field)).prev = null;
             self.len -= 1;
-
-            log.debug("Removed node {*}, queue len={}", .{ node, self.len });
         }
     };
 }

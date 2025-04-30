@@ -16,6 +16,8 @@ const utils = @import("utils.zig");
 const HandlerFn = @import("router.zig").HandlerFn;
 const WebSocketHandlerFn = @import("router.zig").WebSocketHandlerFn;
 
+const log = std.log.scoped(.connection);
+
 // Wrapper for WebSocket close callback
 const ConnectionWrapper = struct {
     ws_conn: *WebSocketConnection,
@@ -55,7 +57,6 @@ pub const Connection = struct {
             .task_data = task_data,
         };
 
-        std.log.debug("Connection initialized for FD: {d}", .{connection.fd});
         try connection.startReading();
         return connection;
     }
@@ -64,17 +65,14 @@ pub const Connection = struct {
         self.task_data.deinit();
         self.allocator.destroy(self.task_data);
         self.allocator.destroy(self);
-        std.log.debug("Connection deinit for FD: {d}", .{self.fd});
     }
 
     pub fn startReading(self: *Connection) !void {
-        std.log.debug("Starting read for FD: {d}", .{self.fd});
         try self.readNext();
     }
 
     fn readNext(self: *Connection) !void {
         if (self.state != .reading_request) {
-            std.log.debug("Skipping readNext on FD: {d}, state: {s}", .{ self.fd, @tagName(self.state) });
             return;
         }
 
@@ -91,12 +89,10 @@ pub const Connection = struct {
             .req = .{ .recv = .{ .fd = self.fd, .buffer = buf } },
         };
         self.server.async_io.?.submission_q.push(task);
-        std.log.debug("Scheduled async recv for FD: {d}, buffer size: {d}, task ptr: {*}", .{ self.fd, buffer_size, task });
     }
 
     pub fn asyncClose(self: *Connection) !void {
         if (self.state == .closed or self.state == .closing) {
-            std.log.debug("Skipping asyncClose on FD: {d}, state: {s}", .{ self.fd, @tagName(self.state) });
             return;
         }
 
@@ -119,11 +115,6 @@ pub const Connection = struct {
 
         self.server.async_io.?.submission_q.push(task);
         self.state = .closing;
-        std.log.debug("Scheduled async close for FD: {d}, task ptr: {*}, callback: {s}", .{
-            self.fd,
-            task,
-            if (self.state == .upgrading_websocket) "handleWebSocketClose" else "handleHttpClose",
-        });
     }
 };
 
@@ -152,12 +143,6 @@ const ConnectionTaskData = struct {
     }
 
     pub fn deinit(self: *ConnectionTaskData) void {
-        std.log.debug("ConnectionTaskData.deinit: FD: {d}, ctx_ptr={x}, res_ptr={x}", .{
-            self.conn.fd,
-            @intFromPtr(self.ctx),
-            if (self.res) |res| @intFromPtr(res) else 0,
-        });
-
         if (self.req) |*req| {
             req.deinit();
             self.req = null;
@@ -190,7 +175,6 @@ const ConnectionTaskData = struct {
 fn sendErrorAsync(task_data: *ConnectionTaskData, status: StatusCode, message: []const u8) !void {
     const conn = task_data.conn;
     if (conn.state == .closed or conn.state == .closing) {
-        std.log.debug("Skipping sendErrorAsync on FD: {d}, state: {s}", .{ conn.fd, @tagName(conn.state) });
         return;
     }
 
@@ -216,7 +200,7 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
     const result = task.result orelse return error.NoResult;
 
     const bytes_read = result.recv catch |err| {
-        std.log.err("Read error on FD: {d}: {any}", .{ conn.fd, err });
+        log.err("Read error on FD: {d}: {any}", .{ conn.fd, err });
         conn.state = .closing;
         try conn.asyncClose();
         task.userdata = null;
@@ -224,7 +208,6 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
     };
 
     if (bytes_read == 0) {
-        std.log.info("Connection closed by peer (FD: {d})", .{conn.fd});
         conn.state = .closing;
         try conn.asyncClose();
         task.userdata = null;
@@ -232,7 +215,6 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
     }
 
     try task_data.request_buffer.resize(bytes_read);
-    std.log.debug("Read {d} bytes on FD: {d}", .{ bytes_read, conn.fd });
 
     conn.state = .processing_request;
     try processRequest(task_data);
@@ -244,14 +226,9 @@ fn processRequest(task_data: *ConnectionTaskData) !void {
     if (conn.state != .processing_request) return;
 
     const req_data = task_data.request_buffer.items;
-    std.log.debug("Request data (FD: {d}): len={d}, data={s}", .{
-        conn.fd,
-        req_data.len,
-        req_data[0..@min(req_data.len, 100)],
-    });
 
     var req = Request.parse(conn.allocator, req_data) catch |err| {
-        std.log.err("Failed to parse request (FD: {d}): {any}", .{ conn.fd, err });
+        log.err("Failed to parse request (FD: {d}): {any}", .{ conn.fd, err });
         try sendErrorAsync(task_data, .bad_request, "Invalid Request");
         return;
     };
@@ -281,7 +258,6 @@ fn handleHttpRequest(task_data: *ConnectionTaskData) !void {
 
     const middlewares = conn.server.router.getMiddlewares();
     var final_handler: HandlerFn = utils.notFound;
-    std.log.debug("FD: {d}, path: {s}, middlewares: {d}", .{ conn.fd, req.path, middlewares.len });
 
     if (middlewares.len > 0) {
         const middleware_context = MiddlewareContext{
@@ -308,12 +284,6 @@ fn handleHttpRequest(task_data: *ConnectionTaskData) !void {
         final_handler(req, res, task_data.ctx);
     } else {
         final_handler = conn.server.router.getHandler(req.method, req.path, task_data.ctx) orelse utils.notFound;
-        std.log.debug("FD: {d}, handler for {s} {s}: {s}", .{
-            conn.fd,
-            @tagName(req.method),
-            req.path,
-            if (final_handler == utils.notFound) "not_found" else "found",
-        });
         final_handler(req, res, task_data.ctx);
     }
 
@@ -327,18 +297,12 @@ fn handleHttpRequest(task_data: *ConnectionTaskData) !void {
             try res.setBody(try conn.allocator.dupe(u8, "Hello, World!"));
             try res.setHeader("Content-Type", "text/plain; charset=utf-8");
         } else {
-            std.log.warn("Template rendering returned null for {s}, sending 404", .{req.path});
+            log.warn("Template rendering returned null for {s}, sending 404", .{req.path});
             if (res.status == .ok) res.status = .not_found;
             try sendErrorAsync(task_data, res.status, "Not Found (or No Template Content)");
             return;
         }
     }
-
-    std.log.debug("FD: {d}, sending response, status: {d}, body_len: {d}", .{
-        conn.fd,
-        @intFromEnum(res.status),
-        if (res.body) |b| b.len else 0,
-    });
 
     conn.state = .sending_response;
     try sendResponseAsync(task_data);
@@ -350,16 +314,10 @@ fn sendResponseAsync(task_data: *ConnectionTaskData) !void {
     const res = task_data.res orelse return error.NoResponse;
 
     if (conn.state != .sending_response) {
-        std.log.debug("Skipping sendResponseAsync on FD: {d}, state: {s}", .{ conn.fd, @tagName(conn.state) });
         return;
     }
 
     const buffer = try res.toBuffer(conn.allocator, req);
-    std.log.debug("Sending response for FD: {d}, status: {d}, buffer_len: {d}", .{
-        conn.fd,
-        @intFromEnum(res.status),
-        buffer.len,
-    });
 
     const task = try conn.server.async_io.?.getTask();
     task.* = .{
@@ -368,7 +326,6 @@ fn sendResponseAsync(task_data: *ConnectionTaskData) !void {
         .req = .{ .write = .{ .fd = conn.fd, .buffer = buffer } },
     };
     conn.server.async_io.?.submission_q.push(task);
-    std.log.debug("Scheduled async response for FD: {d}, task ptr: {*}", .{ conn.fd, task });
 }
 
 fn handleWriteCompletion(_: *AsyncIo, task: *Task) anyerror!void {
@@ -377,26 +334,23 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) anyerror!void {
     const result = task.result orelse return error.NoResult;
 
     const bytes_written = result.write catch |err| {
-        std.log.err("Write error on FD: {d}: {any}", .{ conn.fd, err });
+        log.err("Write error on FD: {d}: {any}", .{ conn.fd, err });
         conn.state = .closing;
         try conn.asyncClose();
         task.userdata = null;
         return;
     };
+    _ = bytes_written;
 
     if (task.req == .write) {
         conn.allocator.free(task.req.write.buffer);
     }
 
-    std.log.debug("Write completed on FD: {d}, bytes: {d}", .{ conn.fd, bytes_written });
-
     if (conn.state == .sending_response and task_data.req != null and task_data.req.?.isWebSocketUpgrade()) {
-        std.log.debug("Detected WebSocket upgrade, completing for FD: {d}", .{conn.fd});
         try completeWebSocketUpgrade(task_data);
     } else {
         // Check if keep-alive is requested
         const req = task_data.req orelse {
-            std.log.debug("No request, closing connection for FD: {d}", .{conn.fd});
             conn.state = .closing;
             _ = conn.server.connections.remove(conn.fd);
             try conn.asyncClose();
@@ -406,14 +360,12 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) anyerror!void {
 
         const connection_header = req.headers.get("Connection") orelse "keep-alive";
         if (std.mem.eql(u8, connection_header, "keep-alive")) {
-            std.log.debug("Keep-alive requested, resetting to reading_request for FD: {d}", .{conn.fd});
             conn.state = .reading_request;
             task_data.req = null;
             task_data.res = null;
             task_data.request_buffer.clearAndFree();
             try conn.readNext();
         } else {
-            std.log.debug("No keep-alive, closing connection for FD: {d}", .{conn.fd});
             conn.state = .closing;
             _ = conn.server.connections.remove(conn.fd);
             try conn.asyncClose();
@@ -425,7 +377,6 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) anyerror!void {
 fn handleWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
     const conn = task_data.conn;
     const req = &(task_data.req orelse return error.NoRequest);
-    std.log.debug("Processing WebSocket upgrade for FD: {d}", .{conn.fd});
 
     const ws_res = try conn.allocator.create(Response);
     errdefer conn.allocator.destroy(ws_res);
@@ -437,7 +388,7 @@ fn handleWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
     }
 
     const ws_key = req.headers.get("Sec-WebSocket-Key") orelse {
-        std.log.err("Missing Sec-WebSocket-Key for WebSocket upgrade (FD: {d})", .{conn.fd});
+        log.err("Missing Sec-WebSocket-Key for WebSocket upgrade (FD: {d})", .{conn.fd});
         try sendErrorAsync(task_data, .bad_request, "Missing Sec-WebSocket-Key");
         return;
     };
@@ -461,7 +412,7 @@ fn handleWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
     }
 
     const ws_handler = conn.server.router.getWebSocketHandler(req.method, req.path, ws_ctx_ptr) orelse {
-        std.log.warn("No WebSocket handler found for path: {s} (FD: {d})", .{ req.path, conn.fd });
+        log.warn("No WebSocket handler found for path: {s} (FD: {d})", .{ req.path, conn.fd });
         try sendErrorAsync(task_data, .not_found, "No WebSocket handler found");
         return;
     };
@@ -469,10 +420,9 @@ fn handleWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
 
     const http_handler = conn.server.router.getHandler(req.method, req.path, task_data.ctx);
     if (http_handler) |handler| {
-        std.log.debug("Running HTTP handler for WebSocket path: {s}, FD: {d}", .{ req.path, conn.fd });
         handler(req, ws_res, task_data.ctx);
         if (ws_res.status != .switching_protocols) {
-            std.log.warn("HTTP handler changed status to {d}, aborting handshake (FD: {d})", .{ @intFromEnum(ws_res.status), conn.fd });
+            log.warn("HTTP handler changed status to {d}, aborting handshake (FD: {d})", .{ @intFromEnum(ws_res.status), conn.fd });
             conn.state = .sending_response;
             try sendResponseAsync(task_data);
             return;
@@ -488,18 +438,12 @@ fn completeWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
     const ws_ctx = task_data.ws_ctx orelse return error.NoWebSocketContext;
     const ws_handler = task_data.ws_handler orelse return error.NoWebSocketHandler;
 
-    std.log.debug("Completing WebSocket upgrade for FD: {d}", .{conn.fd});
-
     const ws = WebSocket.init(conn.fd, conn.allocator, conn.server.options.websocket_options, conn.server.async_io.?);
     const ws_conn = try WebSocketConnection.init(conn.server, ws, ws_ctx, ws_handler, conn.allocator);
-
+    _ = ws_conn;
     try conn.server.websocket_fds.put(conn.fd, {});
-    std.log.debug("Added FD: {d} to websocket_fds after upgrade", .{conn.fd});
-
-    std.log.debug("WebSocketConnection initialized for FD: {d}, ws_conn_ptr={x}", .{ conn.fd, @intFromPtr(ws_conn) });
 
     conn.state = .upgrading_websocket;
-    std.log.debug("Task data retained for WebSocket upgrade, FD: {d}", .{conn.fd});
 }
 
 fn handleWebSocketClose(_: *AsyncIo, task: *Task) anyerror!void {
@@ -511,12 +455,10 @@ fn handleWebSocketClose(_: *AsyncIo, task: *Task) anyerror!void {
     };
 
     _ = result.close catch |err| {
-        std.log.err("Close error (FD: {d}): {any}", .{ ws_conn.ws.socket, err });
+        log.err("Close error (FD: {d}): {any}", .{ ws_conn.ws.socket, err });
     };
 
-    std.log.debug("Async close completed for WebSocket FD: {d}", .{ws_conn.ws.socket});
     ws_conn.state = .closed;
-
     _ = ws_conn.server.websocket_fds.remove(ws_conn.ws.socket);
 
     ws_conn.deinit();
@@ -529,13 +471,12 @@ fn handleHttpClose(_: *AsyncIo, task: *Task) anyerror!void {
     const result = task.result orelse return error.NoResult;
 
     _ = result.close catch |err| {
-        std.log.err("Close error (FD: {d}): {any}", .{ conn.fd, err });
+        log.err("Close error (FD: {d}): {any}", .{ conn.fd, err });
     };
 
-    std.log.debug("Async close completed for HTTP FD: {d}", .{conn.fd});
     conn.state = .closed;
-
     _ = conn.server.connections.remove(conn.fd);
     conn.deinit();
+
     task.userdata = null;
 }

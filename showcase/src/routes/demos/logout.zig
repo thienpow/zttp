@@ -1,4 +1,4 @@
-// zttp/examples/src/routes/logout.zig
+// showcase/src/routes/logout.zig
 const std = @import("std");
 const zttp = @import("zttp");
 const Request = zttp.Request;

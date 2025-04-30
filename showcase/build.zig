@@ -1,4 +1,4 @@
-// examples/build.zig
+// showcase/build.zig
 const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -26,8 +26,8 @@ pub fn build(b: *std.Build) void {
 
     // Executable
     const exe = b.addExecutable(.{
-        .name = "example",
-        .root_source_file = b.path("src/hello.zig"),
+        .name = "showcase",
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -45,6 +45,6 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const run_step = b.step("run", "Run the example");
+    const run_step = b.step("run", "Run the showcase");
     run_step.dependOn(&run_cmd.step);
 }

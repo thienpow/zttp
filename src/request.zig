@@ -3,6 +3,8 @@ const std = @import("std");
 
 const cookie = @import("cookie.zig");
 
+const log = std.log.scoped(.request);
+
 pub const HttpMethod = enum {
     get,
     post,

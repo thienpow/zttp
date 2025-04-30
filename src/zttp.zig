@@ -1,4 +1,4 @@
-// zttp/src/zttp.zig
+// src/zttp.zig
 const std = @import("std");
 
 pub const Middleware = @import("middleware/mod.zig");

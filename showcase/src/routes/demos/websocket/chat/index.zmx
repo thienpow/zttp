@@ -2,76 +2,12 @@
 
 #block content
     <title>ZTTP Showcase - WebSocket Chat</title>
-    <style>
-        #chat-container {
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        #chat-messages {
-            height: 400px;
-            overflow-y: auto;
-            border: 1px solid #ccc;
-            padding: 15px;
-            margin-bottom: 15px;
-            background-color: #f9f9f9;
-            border-radius: 8px;
-        }
-        .message-wrapper {
-            margin: 8px 0;
-        }
-        .chat-message {
-            display: block;
-            padding: 10px 15px;
-            border-radius: 6px;
-            max-width: 80%;
-            word-wrap: break-word;
-            line-height: 1.4;
-        }
-        .chat-message.self {
-            background-color: #d1ecf1; /* Light blue for self */
-            margin-left: auto;
-            text-align: right;
-        }
-        .chat-message.other {
-            background-color: #e2e3e5; /* Light grey for others */
-            margin-right: auto;
-        }
-        .chat-message.system {
-            background-color: #f8d7da; /* Light red for system messages */
-            text-align: center;
-            font-style: italic;
-            margin: 8px auto;
-            max-width: 100%;
-        }
-        #chat-form {
-            display: flex;
-            gap: 10px;
-        }
-        #chat-form input[type="text"] {
-            flex: 1;
-            padding: 10px;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            font-size: 16px;
-        }
-        #chat-form button {
-            padding: 10px 20px;
-            background-color: #007bff;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-        #chat-form button:hover {
-            background-color: #0056b3;
-        }
-    </style>
+    #css "/css/chat.css"
 
     <div id="chat-container">
         <h1>Simple WebSocket Chat</h1>
         <p>Powered by ZTTP WebSockets and HTMX.</p>
-
+        <div id="notifications"></div>
         <div id="chat-room" hx-ext="ws" ws-connect="/demos/websocket/chat/ws">
             <div id="chat-messages">
                 <div class="message-wrapper">
@@ -99,6 +35,34 @@
         // Update UI on WebSocket connection
         document.addEventListener('htmx:wsOpen', function(event) {
             console.log('WebSocket connected:', event.detail);
+            // *** Get the socketWrapper from the event detail ***
+            // Your log shows it's event.detail.socketWrapper
+            const htmxWebSocketSender = event.detail.socketWrapper;
+            // ****************************************************
+
+            // Ensure the sender object is available before trying to send
+            if (htmxWebSocketSender) {
+                // Construct the registration message payload
+                const registrationMessage = {
+                    type: "register", // Matches the type your server checks for
+                    username: username // Use the username obtained earlier
+                    // You could add other initial data here if needed
+                };
+
+                // Convert the JSON object to a string
+                const messageToSend = JSON.stringify(registrationMessage);
+
+                console.log('Sending registration message:', messageToSend);
+
+                // *** Send the message using the socketWrapper ***
+                htmxWebSocketSender.send(messageToSend);
+                // *************************************************
+
+            } else {
+                console.error('WebSocket sender object not found in htmx:wsOpen event.');
+                // Handle this case if necessary, though unlikely if wsOpen fired
+            }
+
             const messagesContainer = document.getElementById('chat-messages');
             const connectingMessage = messagesContainer.querySelector('.chat-message.system');
             if (connectingMessage && connectingMessage.textContent.includes('Connecting')) {

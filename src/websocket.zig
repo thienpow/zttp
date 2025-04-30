@@ -82,9 +82,7 @@ pub const WebSocket = struct {
         // Payload
         try frame.appendSlice(payload);
 
-        log.debug("Sending frame (FD: {d}, opcode: {x}, payload_len: {d}): {x}", .{
-            self.socket, opcode, payload.len, frame.items,
-        });
+        //log.debug("Sending frame (FD: {d}, opcode: {x}, payload_len: {d}): {x}", .{ self.socket, opcode, payload.len, frame.items });
         if (opcode == 0x1) {
             log.debug("Sending payload as string (FD: {d}): {s}", .{ self.socket, payload });
         }
@@ -304,9 +302,9 @@ pub const WebSocketConnection = struct {
             }
         }
 
-        log.debug("Unmasked payload (FD: {d}): {x}", .{ self.ws.socket, self.payload_buffer.items });
+        //log.debug("Unmasked payload (FD: {d}): {x}", .{ self.ws.socket, self.payload_buffer.items });
         if (self.opcode == 0x1) {
-            log.debug("Unmasked payload as string (FD: {d}): {s}", .{ self.ws.socket, self.payload_buffer.items });
+            //log.debug("Unmasked payload as string (FD: {d}): {s}", .{ self.ws.socket, self.payload_buffer.items });
             log.info("WS message received: {s}", .{self.payload_buffer.items});
         }
 
@@ -434,17 +432,14 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
         return;
     }
 
-    log.debug("Received {d} bytes (FD: {d}, state: {s}): {x}", .{
-        bytes_read, conn.ws.socket, @tagName(conn.state), task.req.recv.buffer[0..bytes_read],
-    });
+    //log.debug("Received {d} bytes (FD: {d}, state: {s}): {x}", .{ bytes_read, conn.ws.socket, @tagName(conn.state), task.req.recv.buffer[0..bytes_read] });
     try conn.frame_buffer.appendSlice(task.req.recv.buffer[0..bytes_read]);
     conn.allocator.free(task.req.recv.buffer);
-    log.debug("Full frame buffer (FD: {d}, state: {s}): {x}", .{
-        conn.ws.socket, @tagName(conn.state), conn.frame_buffer.items,
-    });
+    //log.debug("Full frame buffer (FD: {d}, state: {s}): {x}", .{ conn.ws.socket, @tagName(conn.state), conn.frame_buffer.items });
 
     switch (conn.state) {
         .reading_header => {
+            log.debug("Processing header (FD: {d}, buffer_len: {d})", .{ conn.ws.socket, conn.frame_buffer.items.len });
             if (conn.frame_buffer.items.len >= 2) {
                 const header = conn.frame_buffer.items[0..2];
                 conn.fin = (header[0] & 0x80) != 0;
@@ -452,7 +447,11 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
                 const mask_bit = (header[1] & 0x80) != 0;
                 conn.payload_len = @as(u64, header[1] & 0x7F);
 
+                log.debug("Header parsed (FD: {d}, fin: {d}, opcode: {x}, payload_len: {d}, mask_bit: {d})", .{
+                    conn.ws.socket, @intFromBool(conn.fin), conn.opcode, conn.payload_len, @intFromBool(mask_bit),
+                });
                 if (!mask_bit) {
+                    log.err("Unmasked frame received (FD: {d})", .{conn.ws.socket});
                     try conn.sendProtocolError("Unmasked frame received");
                     return;
                 }
@@ -467,36 +466,54 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
                     conn.header_size = 6; // 2 (header) + 4 (mask)
                     conn.state = .reading_mask_key;
                 }
+                log.debug("Transitioning to state: {s} (FD: {d})", .{ @tagName(conn.state), conn.ws.socket });
                 try conn.readNext();
             }
         },
         .reading_extended_length => {
-            if (conn.frame_buffer.items.len >= conn.header_size) {
-                const len_bytes = conn.frame_buffer.items[2 .. conn.header_size - 4];
-                if (conn.header_size == 8) {
+            log.debug("Reading extended length (FD: {d}, buffer_len: {d})", .{ conn.ws.socket, conn.frame_buffer.items.len });
+            // Define required_len as a variable to be set at runtime
+            var required_len: usize = undefined;
+            if (conn.payload_len == 126) {
+                required_len = 4; // 2 (header) + 2 (ext len)
+            } else { // payload_len == 127
+                required_len = 10; // 2 (header) + 8 (ext len)
+            }
+            if (conn.frame_buffer.items.len >= required_len) {
+                const len_bytes = conn.frame_buffer.items[2..required_len];
+                if (conn.payload_len == 126) { // header_size == 8
                     if (len_bytes.len < 2) {
+                        log.err("Incomplete extended length (FD: {d}): {x}", .{ conn.ws.socket, len_bytes });
                         try conn.sendProtocolError("Incomplete extended length");
                         return;
                     }
                     const fixed_len_bytes: *const [2]u8 = len_bytes[0..2];
                     conn.payload_len = std.mem.readInt(u16, fixed_len_bytes, .big);
-                } else {
+                    log.debug("Parsed extended length (FD: {d}): {d}", .{ conn.ws.socket, conn.payload_len });
+                } else { // payload_len == 127, header_size == 14
                     if (len_bytes.len < 8) {
+                        log.err("Incomplete extended length (FD: {d}): {x}", .{ conn.ws.socket, len_bytes });
                         try conn.sendProtocolError("Incomplete extended length");
                         return;
                     }
                     const fixed_len_bytes: *const [8]u8 = len_bytes[0..8];
                     conn.payload_len = std.mem.readInt(u64, fixed_len_bytes, .big);
+                    log.debug("Parsed extended length (FD: {d}): {d}", .{ conn.ws.socket, conn.payload_len });
                 }
                 if (conn.payload_len > conn.ws.options.max_payload_size) {
+                    log.err("Payload length {d} exceeds max_payload_size {d} (FD: {d})", .{
+                        conn.payload_len, conn.ws.options.max_payload_size, conn.ws.socket,
+                    });
                     try conn.sendMessageTooBig();
                     return;
                 }
                 conn.state = .reading_mask_key;
+                log.debug("Transitioning to state: {s} (FD: {d})", .{ @tagName(conn.state), conn.ws.socket });
                 try conn.readNext();
             }
         },
         .reading_mask_key => {
+            log.debug("Reading mask key (FD: {d}, buffer_len: {d})", .{ conn.ws.socket, conn.frame_buffer.items.len });
             if (conn.frame_buffer.items.len >= conn.header_size) {
                 const mask_slice = conn.frame_buffer.items[conn.header_size - 4 .. conn.header_size];
                 if (mask_slice.len == 4) {
@@ -511,13 +528,18 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
             }
         },
         .reading_payload => {
+            log.debug("Reading payload (FD: {d}, buffer_len: {d}, expected_len: {d})", .{
+                conn.ws.socket, conn.frame_buffer.items.len, conn.header_size + conn.payload_len,
+            });
             if (conn.frame_buffer.items.len >= conn.header_size + conn.payload_len) {
                 try conn.processFrame();
             } else {
                 try conn.readNext();
             }
         },
-        .closed => {},
+        .closed => {
+            log.debug("Connection closed, ignoring read (FD: {d})", .{conn.ws.socket});
+        },
     }
 
     task.userdata = null;

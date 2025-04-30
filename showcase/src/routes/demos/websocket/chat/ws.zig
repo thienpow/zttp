@@ -28,12 +28,14 @@ const ChatMessage = struct {
     username: []const u8,
     message: []const u8,
     type: []const u8,
+    room: ?[]const u8 = null,
 
-    fn init(username: []const u8, message: []const u8, msg_type: MessageType) ChatMessage {
+    fn init(username: []const u8, message: []const u8, msg_type: MessageType, room: ?[]const u8) ChatMessage {
         return .{
             .username = username,
             .message = message,
             .type = msg_type.toString(),
+            .room = room,
         };
     }
 };
@@ -42,10 +44,12 @@ const ChatMessage = struct {
 const Client = struct {
     wsk: *WebSocket,
     username: []u8,
+    room: []u8,
     async_ctx: AsyncContext,
 
     fn deinit(self: *Client, allocator: Allocator) void {
         allocator.free(self.username);
+        allocator.free(self.room);
     }
 };
 
@@ -73,9 +77,12 @@ pub const ChatServer = struct {
         self.clients.deinit();
     }
 
-    fn addClient(self: *ChatServer, wsk: *WebSocket, username: []const u8, async_ctx: AsyncContext) !void {
+    fn addClient(self: *ChatServer, wsk: *WebSocket, username: []const u8, room: []const u8, async_ctx: AsyncContext) !void {
         const owned_username = try self.allocator.dupe(u8, username);
         errdefer self.allocator.free(owned_username);
+
+        const owned_room = try self.allocator.dupe(u8, room);
+        errdefer self.allocator.free(owned_room);
 
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -83,15 +90,17 @@ pub const ChatServer = struct {
         // Check if client already exists
         if (self.clients.contains(wsk)) {
             self.allocator.free(owned_username);
+            self.allocator.free(owned_room);
             return error.ClientAlreadyExists;
         }
 
         try self.clients.put(wsk, .{
             .wsk = wsk,
             .username = owned_username,
+            .room = owned_room,
             .async_ctx = async_ctx,
         });
-        std.log.debug("ChatServer.addClient: Added client, username={s}, wsk={*}, total clients={}", .{ username, wsk, self.clients.count() });
+        std.log.debug("ChatServer.addClient: Added client, username={s}, room={s}, wsk={*}, total clients={}", .{ username, room, wsk, self.clients.count() });
     }
 
     fn removeClient(self: *ChatServer, wsk: *WebSocket) void {
@@ -100,7 +109,7 @@ pub const ChatServer = struct {
 
         if (self.clients.getEntry(wsk)) |entry| {
             const client = entry.value_ptr;
-            std.log.debug("ChatServer.removeClient: Removing client, username={s}, wsk={*}, remaining clients={}", .{ client.username, wsk, self.clients.count() - 1 });
+            std.log.debug("ChatServer.removeClient: Removing client, username={s}, room={s}, wsk={*}, remaining clients={}", .{ client.username, client.room, wsk, self.clients.count() - 1 });
             client.deinit(self.allocator);
             _ = self.clients.orderedRemove(wsk);
         } else {
@@ -108,12 +117,12 @@ pub const ChatServer = struct {
         }
     }
 
-    fn getClientUsername(self: *ChatServer, wsk: *WebSocket) ?[]const u8 {
+    fn getClientInfo(self: *ChatServer, wsk: *WebSocket) ?struct { username: []const u8, room: []const u8 } {
         self.mutex.lock();
         defer self.mutex.unlock();
 
         if (self.clients.getPtr(wsk)) |client| {
-            return client.username;
+            return .{ .username = client.username, .room = client.room };
         }
         return null;
     }
@@ -130,13 +139,29 @@ pub const ChatServer = struct {
         return self.clients.count();
     }
 
+    fn getClientCountInRoom(self: *ChatServer, room: []const u8) usize {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var count: usize = 0;
+        var it = self.clients.iterator();
+        while (it.next()) |entry| {
+            if (std.mem.eql(u8, entry.value_ptr.room, room)) {
+                count += 1;
+            }
+        }
+        return count;
+    }
+
     fn broadcast(self: *ChatServer, message: ChatMessage) !void {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
         const arena_allocator = arena.allocator();
 
         const json = try std.json.stringifyAlloc(arena_allocator, message, .{});
-        std.log.debug("ChatServer.broadcast: Broadcasting message, type={s}, username={s}, json={s}", .{ message.type, message.username, json });
+        const target_room = message.room orelse "";
+
+        std.log.debug("ChatServer.broadcast: Broadcasting message, type={s}, username={s}, room={s}, json={s}", .{ message.type, message.username, target_room, json });
 
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -146,10 +171,17 @@ pub const ChatServer = struct {
         var failed_clients = std.ArrayList(*WebSocket).init(arena_allocator);
 
         while (it.next()) |entry| {
+            // Only broadcast to clients in the target room if specified
+            if (message.room != null and !std.mem.eql(u8, entry.value_ptr.room, target_room)) {
+                std.log.debug("ChatServer.broadcast: Skipping client in different room, username={s}, client_room={s}, target_room={s}", .{ entry.value_ptr.username, entry.value_ptr.room, target_room });
+                continue;
+            }
+
             client_count += 1;
-            std.log.debug("ChatServer.broadcast: Sending to client, username={s}, wsk={*}", .{ entry.value_ptr.username, entry.value_ptr.wsk });
+            std.log.debug("ChatServer.broadcast: Sending to client, username={s}, room={s}, wsk={*}", .{ entry.value_ptr.username, entry.value_ptr.room, entry.value_ptr.wsk });
+
             entry.value_ptr.wsk.sendMessageAsync(json, entry.value_ptr.async_ctx) catch |err| {
-                std.log.err("ChatServer.broadcast: Failed to send message to client, username={s}, wsk={*}, error={}", .{ entry.value_ptr.username, entry.value_ptr.wsk, err });
+                std.log.err("ChatServer.broadcast: Failed to send message to client, username={s}, room={s}, wsk={*}, error={}", .{ entry.value_ptr.username, entry.value_ptr.room, entry.value_ptr.wsk, err });
                 try failed_clients.append(entry.value_ptr.wsk);
                 continue;
             };
@@ -163,7 +195,7 @@ pub const ChatServer = struct {
         std.log.debug("ChatServer.broadcast: Sent to {} clients", .{client_count - failed_clients.items.len});
     }
 
-    fn broadcastToOpponents(self: *ChatServer, sender_wsk: *WebSocket, html_message: []const u8) !void {
+    fn broadcastToRoom(self: *ChatServer, sender_wsk: *WebSocket, html_message: []const u8, room: []const u8) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
@@ -173,15 +205,22 @@ pub const ChatServer = struct {
         defer failed_clients.deinit();
 
         while (it.next()) |entry| {
+            // Skip if not in the same room
+            if (!std.mem.eql(u8, entry.value_ptr.room, room)) {
+                continue;
+            }
+
+            // Skip the sender
             if (entry.key_ptr.* == sender_wsk) {
-                std.log.debug("ChatServer.broadcastToOpponents: Skipping sender, username={s}, wsk={*}", .{ entry.value_ptr.username, entry.value_ptr.wsk });
+                std.log.debug("ChatServer.broadcastToRoom: Skipping sender, username={s}, room={s}, wsk={*}", .{ entry.value_ptr.username, entry.value_ptr.room, entry.value_ptr.wsk });
                 continue;
             }
 
             client_count += 1;
-            std.log.debug("ChatServer.broadcastToOpponents: Sending to client, username={s}, wsk={*}", .{ entry.value_ptr.username, entry.value_ptr.wsk });
+            std.log.debug("ChatServer.broadcastToRoom: Sending to client, username={s}, room={s}, wsk={*}", .{ entry.value_ptr.username, entry.value_ptr.room, entry.value_ptr.wsk });
+
             entry.value_ptr.wsk.sendMessageAsync(html_message, entry.value_ptr.async_ctx) catch |err| {
-                std.log.err("ChatServer.broadcastToOpponents: Failed to send message to client, username={s}, wsk={*}, error={}", .{ entry.value_ptr.username, entry.value_ptr.wsk, err });
+                std.log.err("ChatServer.broadcastToRoom: Failed to send message to client, username={s}, room={s}, wsk={*}, error={}", .{ entry.value_ptr.username, entry.value_ptr.room, entry.value_ptr.wsk, err });
                 try failed_clients.append(entry.value_ptr.wsk);
                 continue;
             };
@@ -196,17 +235,17 @@ pub const ChatServer = struct {
             }
         }
 
-        std.log.debug("ChatServer.broadcastToOpponents: Sent to {} clients", .{client_count - failed_clients.items.len});
+        std.log.debug("ChatServer.broadcastToRoom: Sent to {} clients in room {s}", .{ client_count - failed_clients.items.len, room });
         if (client_count == 0) {
-            std.log.warn("ChatServer.broadcastToOpponents: No opponents found for sender_wsk={*}", .{sender_wsk});
+            std.log.warn("ChatServer.broadcastToRoom: No other clients found in room {s} for sender_wsk={*}", .{ room, sender_wsk });
         }
     }
 
-    fn broadcastSystemMessage(self: *ChatServer, ctx: *Context, comptime format_string: []const u8, args: anytype) !void {
+    fn broadcastSystemMessage(self: *ChatServer, ctx: *Context, room: []const u8, comptime format_string: []const u8, args: anytype) !void {
         const html = try std.fmt.allocPrint(ctx.allocator, "<div id=\"chat-messages\" hx-swap-oob=\"beforeend\"><div class=\"chat-message system\">System: " ++ format_string ++ "</div></div>", args);
         defer ctx.allocator.free(html);
 
-        try self.broadcast(ChatMessage.init("System", html, .system));
+        try self.broadcast(ChatMessage.init("System", html, .system, room));
     }
 };
 
@@ -277,45 +316,37 @@ pub fn deinitChatServer() void {
     }
 }
 
-// Helper function to manually parse URL for query parameters
-fn parseQueryParameter(url: []const u8, param_name: []const u8) ?[]const u8 {
-    const query_start_idx = std.mem.indexOfScalar(u8, url, '?') orelse return null;
-    if (query_start_idx + 1 >= url.len) return null;
-
-    const query = url[query_start_idx + 1 ..];
-
-    var pairs = std.mem.splitScalar(u8, query, '&');
-    while (pairs.next()) |pair| {
-        var kv_iter = std.mem.splitScalar(u8, pair, '=');
-        if (kv_iter.next()) |key| {
-            if (std.mem.eql(u8, key, param_name)) {
-                return kv_iter.next();
-            }
-        }
-    }
-
-    return null;
-}
-
 // Handle register message
-fn handleRegisterMessage(server: *ChatServer, wsk: *WebSocket, username: []const u8, async_ctx: AsyncContext, ctx: *Context) !void {
+fn handleRegisterMessage(server: *ChatServer, wsk: *WebSocket, username: []const u8, room: []const u8, async_ctx: AsyncContext, ctx: *Context) !void {
     if (!server.hasClient(wsk)) {
-        std.log.debug("handleRegisterMessage: Registering new client, username={s}, wsk={*}", .{ username, wsk });
-        try server.addClient(wsk, username, async_ctx);
-        try server.broadcastSystemMessage(ctx, "{s} joined the chat", .{username});
+        std.log.debug("handleRegisterMessage: Registering new client, username={s}, room={s}, wsk={*}", .{ username, room, wsk });
+        try server.addClient(wsk, username, room, async_ctx);
+
+        const room_count = server.getClientCountInRoom(room);
+        std.log.debug("handleRegisterMessage: Room {s} now has {} clients", .{ room, room_count });
+
+        try server.broadcastSystemMessage(ctx, room, "{s} joined the chat in room {s}", .{ username, room });
     }
 }
 
 // Handle chat message
-fn handleChatMessage(server: *ChatServer, wsk: *WebSocket, msg_content: []const u8, username: []const u8, ctx: *Context) !void {
-    const client_count = server.getClientCount();
-    std.log.debug("handleChatMessage: Broadcasting to opponents, total clients={}", .{client_count});
+fn handleChatMessage(server: *ChatServer, wsk: *WebSocket, msg_content: []const u8, ctx: *Context) !void {
+    const client_info = server.getClientInfo(wsk) orelse {
+        std.log.warn("handleChatMessage: Client not found for wsk={*}", .{wsk});
+        return;
+    };
+
+    const username = client_info.username;
+    const room = client_info.room;
+
+    const room_count = server.getClientCountInRoom(room);
+    std.log.debug("handleChatMessage: Broadcasting to room {s}, total clients in room={}", .{ room, room_count });
 
     const chat_html = try std.fmt.allocPrint(ctx.allocator, "<div id=\"chat-messages\" hx-swap-oob=\"beforeend\"><div class=\"chat-message other\">{s}: {s}</div></div>", .{ username, msg_content });
     defer ctx.allocator.free(chat_html);
 
-    std.log.debug("handleChatMessage: Broadcasting chat message from {s}", .{username});
-    try server.broadcastToOpponents(wsk, chat_html);
+    std.log.debug("handleChatMessage: Broadcasting chat message from {s} in room {s}", .{ username, room });
+    try server.broadcastToRoom(wsk, chat_html, room);
 }
 
 // WebSocket message handler
@@ -340,12 +371,13 @@ pub fn ws(wsk: *WebSocket, message: []const u8, ctx: *Context, async_ctx: AsyncC
     const RegisterPayload = struct {
         type: []const u8,
         username: []const u8,
+        room: []const u8,
     };
 
     if (std.json.parseFromSliceLeaky(RegisterPayload, arena_allocator, message, .{ .ignore_unknown_fields = true })) |payload| {
         if (std.mem.eql(u8, payload.type, "register")) {
-            std.log.debug("ws: Handling register message, wsk={*}", .{wsk});
-            try handleRegisterMessage(server, wsk, payload.username, async_ctx, ctx);
+            std.log.debug("ws: Handling register message, wsk={*}, username={s}, room={s}", .{ wsk, payload.username, payload.room });
+            try handleRegisterMessage(server, wsk, payload.username, payload.room, async_ctx, ctx);
             return;
         }
     } else |err| {
@@ -366,28 +398,15 @@ pub fn ws(wsk: *WebSocket, message: []const u8, ctx: *Context, async_ctx: AsyncC
 
     const parsed = std.json.parseFromSliceLeaky(JsonPayload, arena_allocator, message, .{ .ignore_unknown_fields = true }) catch |err| {
         std.log.warn("ws: Failed to parse JSON message: {s}, error={}", .{ message, err });
+
         const error_html = "<div id=\"chat-messages\" hx-swap-oob=\"beforeend\"><div class=\"chat-message system\">System: Invalid message format</div></div>";
         try wsk.sendMessageAsync(error_html, async_ctx);
         return;
     };
 
     const msg_content = parsed.chat_message;
-    var username: []const u8 = "Guest";
 
-    // Get username from client data or URL
-    if (server.getClientUsername(wsk)) |name| {
-        username = name;
-    } else if (parsed.HEADERS) |headers| {
-        if (headers.@"HX-Current-URL") |url_str| {
-            if (parseQueryParameter(url_str, "user")) |user_value| {
-                username = user_value;
-                // Register client if not already registered
-                try handleRegisterMessage(server, wsk, username, async_ctx, ctx);
-            }
-        }
-    }
-
-    try handleChatMessage(server, wsk, msg_content, username, ctx);
+    try handleChatMessage(server, wsk, msg_content, ctx);
 }
 
 // Handle WebSocket close
@@ -404,13 +423,20 @@ pub fn wsClose(wsk: *WebSocket, ctx: *Context, _: AsyncContext) void {
         return;
     };
 
-    const username = server.getClientUsername(wsk) orelse "Guest";
-    std.log.debug("wsClose: Removing client, username={s}, wsk={*}", .{ username, wsk });
+    const client_info = server.getClientInfo(wsk) orelse {
+        std.log.warn("wsClose: Client not found for wsk={*}", .{wsk});
+        return;
+    };
+
+    const username = client_info.username;
+    const room = client_info.room;
+
+    std.log.debug("wsClose: Removing client, username={s}, room={s}, wsk={*}", .{ username, room, wsk });
 
     server.removeClient(wsk);
 
-    std.log.debug("wsClose: Broadcasting leave message for {s}", .{username});
-    server.broadcastSystemMessage(ctx, "{s} left the chat", .{username}) catch |err| {
-        std.log.err("wsClose: Failed to broadcast leave message for {s}: {}", .{ username, err });
+    std.log.debug("wsClose: Broadcasting leave message for {s} in room {s}", .{ username, room });
+    server.broadcastSystemMessage(ctx, room, "{s} left the chat in room {s}", .{ username, room }) catch |err| {
+        std.log.err("wsClose: Failed to broadcast leave message for {s} in room {s}: {}", .{ username, room, err });
     };
 }

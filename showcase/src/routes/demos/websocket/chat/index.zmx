@@ -26,6 +26,7 @@
         // Get username from query parameter
         const urlParams = new URLSearchParams(window.location.search);
         const username = urlParams.get('user') || 'Guest';
+        const room = urlParams.get('room') || 'zttp';
 
         // Debug connection attempts
         document.addEventListener('htmx:wsConnecting', function(event) {
@@ -45,8 +46,8 @@
                 // Construct the registration message payload
                 const registrationMessage = {
                     type: "register", // Matches the type your server checks for
-                    username: username // Use the username obtained earlier
-                    // You could add other initial data here if needed
+                    username: username, // Use the username obtained earlier
+                    room: room
                 };
 
                 // Convert the JSON object to a string

@@ -120,6 +120,21 @@
             </div>
         </div>
 
+        <!-- Demo Item 6: WebSocket Chat -->
+        <div class="accordion">
+            <div class="accordion-header">WebSocket Chat</div>
+            <div class="accordion-content">
+                <h3><a href="/demos/websocket/chat" hx-target="main" hx-boost="true">WebSocket Chat</a></h3>
+                <p>A real-time chat application using ZTTP WebSockets and HTMX, demonstrating live message broadcasting between multiple clients.</p>
+                <p>Location: <code>/demos/websocket/chat</code></p>
+                <p>Try opening the chat as different users in separate browsers:</p>
+                <ul>
+                    <li><a href="/demos/websocket/chat?room=zttp&user=bob" target="_blank" hx-target="main" hx-boost="true"><code>/demos/websocket/chat?room=zttp&user=bob</code> (Join as Bob in room 'zttp')</a></li>
+                    <li><a href="/demos/websocket/chat?room=zttp&user=alice" target="_blank" hx-target="main" hx-boost="true"><code>/demos/websocket/chat?room=zttp&user=alice</code> (Join as Alice in room 'zttp')</a></li>
+                </ul>
+            </div>
+        </div>
+
     </div>
 
 #endblock

@@ -31,7 +31,7 @@ pub const Server = struct {
         websocket_options: websocket.WebSocket.Options = .{},
         async_ring_entries: u16 = 1024, // Increased for browser workloads
         max_connections: usize = 100, // Limit concurrent connections
-        header_read_timeout_ms: u64 = 30_000,
+        header_read_timeout_ms: u64 = 1000,
     };
 
     pub fn init(allocator: Allocator, options: Options) !Server {

@@ -1,10 +1,15 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+
 const WebSocket = @import("websocket.zig").WebSocket;
 const WebSocketTransport = @import("transport.zig").WebSocketTransport;
-const Context = @import("../context.zig").Context;
-const WebSocketHandlerFn = @import("../router.zig").WebSocketHandlerFn;
-const Server = @import("../server.zig").Server;
+
+const core = @import("../core/mod.zig");
+const Context = core.Context;
+const Server = core.Server;
+
+const WebSocketHandlerFn = @import("../core/router.zig").WebSocketHandlerFn;
+
 const AsyncIo = @import("../async/async.zig").AsyncIo;
 const AsyncContext = @import("../async/async.zig").Context;
 const Task = @import("../async/task.zig").Task;
@@ -55,8 +60,8 @@ pub const WebSocketConnection = struct {
             .handler = handler,
             .allocator = allocator,
             .state = .reading_header,
-            .frame_buffer = std.ArrayList(u8).init(allocator),
-            .payload_buffer = std.ArrayList(u8).init(allocator),
+            .frame_buffer = try std.ArrayList(u8).initCapacity(allocator, ws.options.frame_buffer_initial_capacity),
+            .payload_buffer = try std.ArrayList(u8).initCapacity(allocator, ws.options.payload_buffer_initial_capacity),
             .mask_key = null,
             .opcode = 0,
             .fin = false,
@@ -159,7 +164,7 @@ pub const WebSocketConnection = struct {
             return;
         }
 
-        if (!self.fin and self.opcode < 0x8) {
+        if (!self.ws.options.support_fragmented_frames and !self.fin and self.opcode < 0x8) {
             try self.sendProtocolError("Fragmented frames not supported");
             return;
         }
@@ -192,7 +197,8 @@ pub const WebSocketConnection = struct {
                     if (self.ws.is_open and self.state != .closed) {
                         var close_payload = std.ArrayList(u8).init(self.allocator);
                         defer close_payload.deinit();
-                        try close_payload.writer().writeInt(u16, 1000, .big); // Normal closure (1000)
+                        const close_code = self.ws.options.custom_close_code orelse 1000; // Normal closure (1000) or custom
+                        try close_payload.writer().writeInt(u16, close_code, .big);
                         try self.ws.sendFrameAsync(0x8, close_payload.items, ctx);
                         self.state = .closed;
                         self.ws.close(AsyncContext{

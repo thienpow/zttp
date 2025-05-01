@@ -1,23 +1,27 @@
-// src/zttp.zig
 const std = @import("std");
 
-pub const Middleware = @import("middleware/mod.zig");
-pub const Request = @import("request.zig").Request;
-pub const HttpMethod = @import("request.zig").HttpMethod;
-pub const Response = @import("response.zig").Response;
-pub const Context = @import("context.zig").Context;
-pub const WebSocket = @import("websocket/mod.zig").WebSocket;
-pub const ThreadPool = @import("pool.zig").ThreadPool;
-pub const Server = @import("server.zig").Server;
-pub const Async = @import("async/async.zig");
-pub const AsyncContext = Async.Context;
+const http = @import("http/mod.zig");
+pub const HttpMethod = http.HttpMethod;
+pub const Request = http.Request;
+pub const Response = http.Response;
 
-const router = @import("router.zig");
+const core = @import("core/mod.zig");
+pub const Context = core.Context;
+pub const Server = core.Server;
+pub const middleware = @import("middleware/mod.zig");
+
+const router = @import("core/router.zig");
 const MiddlewareFn = router.MiddlewareFn;
 const HandlerFn = router.HandlerFn;
 const NextFn = router.NextFn;
 const Router = router.Router;
-pub const WebSocketHandlerFn = router.WebSocketHandlerFn;
+const WebSocketHandlerFn = router.WebSocketHandlerFn;
+
+const Async = @import("async/async.zig");
+pub const AsyncContext = Async.Context;
+
+const websocket = @import("websocket/mod.zig");
+pub const WebSocket = websocket.WebSocket;
 
 const cache = @import("template/cache.zig");
 
@@ -44,28 +48,30 @@ pub const Template = struct {
 pub fn createServer(
     allocator: std.mem.Allocator,
     server_options: Server.Options,
+    num_servers: usize,
 ) !*ServerBundle {
-    var pool = try allocator.create(ThreadPool);
-    pool.* = try ThreadPool.init(allocator);
-    errdefer {
-        pool.deinit();
-        allocator.destroy(pool);
+    if (num_servers == 0) {
+        return error.InvalidServerCount;
     }
 
-    try pool.startWorkers(8);
-
-    var server = try allocator.create(Server);
-    server.* = try Server.init(allocator, server_options);
+    var servers = try allocator.alloc(*Server, num_servers);
     errdefer {
-        server.deinit();
-        allocator.destroy(server);
+        for (servers) |server| {
+            server.deinit();
+            allocator.destroy(server);
+        }
+        allocator.free(servers);
+    }
+
+    for (0..num_servers) |i| {
+        servers[i] = try allocator.create(Server);
+        servers[i].* = try Server.init(allocator, server_options); // Same port for all
     }
 
     const bundle = try allocator.create(ServerBundle);
     bundle.* = ServerBundle{
         .allocator = allocator,
-        .server = server,
-        .pool = pool,
+        .servers = servers,
         .server_options = server_options,
     };
 
@@ -74,16 +80,15 @@ pub fn createServer(
 
 pub const ServerBundle = struct {
     allocator: std.mem.Allocator,
-    server: *Server,
-    pool: *ThreadPool,
+    servers: []*Server,
     server_options: Server.Options,
 
-    pub fn start(self: *ServerBundle, start_thread: bool) !void {
-        if (start_thread) {
-            const thread = try std.Thread.spawn(.{}, startServerThread, .{self});
-            _ = thread;
-        } else {
-            try self.server.start();
+    pub fn start(self: *ServerBundle) !void {
+        var threads = try self.allocator.alloc(std.Thread, self.servers.len);
+        defer self.allocator.free(threads);
+
+        for (0..self.servers.len) |i| {
+            threads[i] = try std.Thread.spawn(.{}, startServerThread, .{ self, i });
         }
 
         while (true) {
@@ -92,16 +97,24 @@ pub const ServerBundle = struct {
     }
 
     pub fn deinit(self: *ServerBundle) void {
-        self.server.deinit();
-        self.pool.deinit();
+        for (self.servers) |server| {
+            server.deinit();
+            self.allocator.destroy(server);
+        }
+        self.allocator.free(self.servers);
+        self.allocator.destroy(self);
     }
 
     pub fn route(self: *ServerBundle, method: HttpMethod, path: []const u8, handler: HandlerFn) !void {
-        try self.server.route("", method, path, handler, null);
+        for (self.servers) |server| {
+            try server.route("", method, path, handler, null);
+        }
     }
 
-    pub fn use(self: *ServerBundle, middleware: MiddlewareFn) !void {
-        try self.server.use(middleware);
+    pub fn use(self: *ServerBundle, middlewareFn: MiddlewareFn) !void {
+        for (self.servers) |server| {
+            try server.use(middlewareFn);
+        }
     }
 
     pub fn loadRoutes(self: *ServerBundle, comptime getRoutesFn: fn (std.mem.Allocator) anyerror![]const Route) !void {
@@ -110,8 +123,10 @@ pub const ServerBundle = struct {
             std.log.warn("No routes loaded", .{});
         }
 
-        for (routes) |r| {
-            try self.server.route(r.module_name, r.method, r.path, r.handler, r.ws_handler);
+        for (self.servers) |server| {
+            for (routes) |r| {
+                try server.route(r.module_name, r.method, r.path, r.handler, r.ws_handler);
+            }
         }
     }
 
@@ -130,8 +145,8 @@ pub const ServerBundle = struct {
     }
 };
 
-fn startServerThread(bundle: *ServerBundle) void {
-    bundle.server.start() catch |err| {
-        std.log.err("Failed to start server: {}", .{err});
+fn startServerThread(bundle: *ServerBundle, server_index: usize) void {
+    bundle.servers[server_index].start() catch |err| {
+        std.log.err("Failed to start server {d} on port {d}: {}", .{ server_index, bundle.server_options.port, err });
     };
 }

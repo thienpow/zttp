@@ -1,8 +1,11 @@
 const std = @import("std");
-const Request = @import("request.zig").Request;
-const Response = @import("response.zig").Response;
-const Context = @import("context.zig").Context;
-const StatusCode = @import("response.zig").StatusCode;
+
+const http = @import("http/mod.zig");
+const Request = http.Request;
+const Response = http.Response;
+const StatusCode = http.StatusCode;
+
+const Context = @import("core/context.zig").Context;
 
 pub fn notFound(_: *Request, res: *Response, _: *Context) void {
     res.status = .not_found;

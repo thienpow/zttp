@@ -1,14 +1,19 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const AsyncIo = @import("async/async.zig").AsyncIo;
-const Task = @import("async/task.zig").Task;
+
 const Router = @import("router.zig").Router;
-const HttpMethod = @import("request.zig").HttpMethod;
 const HandlerFn = @import("router.zig").HandlerFn;
 const WebSocketHandlerFn = @import("router.zig").WebSocketHandlerFn;
 const MiddlewareFn = @import("router.zig").MiddlewareFn;
-const websocket = @import("websocket/mod.zig");
+
+const AsyncIo = @import("../async/async.zig").AsyncIo;
+const Task = @import("../async/task.zig").Task;
+
+const HttpMethod = @import("../http/request.zig").HttpMethod;
+
+const websocket = @import("../websocket/mod.zig");
 const Connection = @import("connection.zig").Connection;
+
 const log = std.log.scoped(.server);
 
 pub const Server = struct {
@@ -45,7 +50,28 @@ pub const Server = struct {
         server.async_io.?.* = try AsyncIo.init(allocator, options.async_ring_entries);
 
         const address = std.net.Address.initIp4([4]u8{ 0, 0, 0, 0 }, options.port);
-        server.listener = try address.listen(.{ .reuse_address = true });
+        const socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC, 0);
+        errdefer std.posix.close(socket);
+
+        // Set SO_REUSEADDR
+        try std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
+
+        // Set SO_REUSEPORT if available
+        const reuse_port_supported = @hasDecl(std.posix.SO, "REUSEPORT");
+        if (reuse_port_supported) {
+            try std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.REUSEPORT, &std.mem.toBytes(@as(c_int, 1)));
+            log.info("SO_REUSEPORT enabled for socket on port {d}", .{options.port});
+        } else {
+            log.warn("SO_REUSEPORT not supported on this platform, multiple servers may fail to bind", .{});
+        }
+
+        try std.posix.bind(socket, &address.any, address.getOsSockLen());
+        try std.posix.listen(socket, 128);
+        server.listener = std.net.Server{
+            .stream = .{ .handle = socket },
+            .listen_address = address,
+        };
+
         return server;
     }
 

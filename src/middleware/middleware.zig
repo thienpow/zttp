@@ -1,13 +1,19 @@
 // src/middleware.zig
 const std = @import("std");
-const Request = @import("request.zig").Request;
-const Response = @import("response.zig").Response;
-const Context = @import("context.zig").Context;
-const HandlerFn = @import("router.zig").HandlerFn;
-const MiddlewareFn = @import("router.zig").MiddlewareFn;
-const NextFn = @import("router.zig").NextFn;
-const Server = @import("server.zig").Server;
-const utils = @import("utils.zig");
+
+const http = @import("../http/mod.zig");
+pub const Request = http.Request;
+pub const Response = http.Response;
+
+const core = @import("../core/mod.zig");
+pub const Context = core.Context;
+const Server = core.Server;
+
+const router = @import("../core/router.zig");
+const HandlerFn = router.HandlerFn;
+const MiddlewareFn = router.MiddlewareFn;
+const NextFn = router.NextFn;
+const utils = @import("../utils.zig");
 
 pub const MiddlewareContext = struct {
     middlewares: []const MiddlewareFn,

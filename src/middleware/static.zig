@@ -1,9 +1,12 @@
 const std = @import("std");
-pub const Request = @import("../request.zig").Request;
-pub const Response = @import("../response.zig").Response;
-pub const Context = @import("../context.zig").Context;
-
 const Allocator = std.mem.Allocator;
+
+const http = @import("../http/mod.zig");
+pub const Request = http.Request;
+pub const Response = http.Response;
+
+const core = @import("../core/mod.zig");
+pub const Context = core.Context;
 
 // Hardcoded static folder path
 const STATIC_DIR = "static";

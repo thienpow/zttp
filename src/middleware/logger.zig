@@ -1,7 +1,11 @@
 const std = @import("std");
-pub const Request = @import("../request.zig").Request;
-pub const Response = @import("../response.zig").Response;
-pub const Context = @import("../context.zig").Context;
+
+const http = @import("../http/mod.zig");
+pub const Request = http.Request;
+pub const Response = http.Response;
+
+const core = @import("../core/mod.zig");
+pub const Context = core.Context;
 
 pub fn log(req: *Request, res: *Response, ctx: *Context, next: *const fn (*Request, *Response, *Context) void) void {
     // Skip middleware for WebSocket upgrade requests

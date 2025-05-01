@@ -116,7 +116,7 @@
             Welcome to the ZTTP Showcase! Discover how the <strong>ZTTP</strong> framework simplifies web development
             by combining the performance and safety of <strong>Zig</strong> with the dynamic UI capabilities of <strong>HTMX</strong>.
         </p>
-        <a href="/getting-started" hx-target="main" hx-boost="true" class="btn btn-primary">Get Started Now</a>
+        <a href="/demos" hx-target="main" hx-boost="true" class="btn btn-primary">Live Demos</a>
     </div>
 
     <div class="features-grid">

@@ -4,7 +4,7 @@ pub const cache = @import("cache.zig");
 const parser = @import("parser.zig");
 const renderer = @import("renderer.zig");
 const types = @import("types.zig");
-pub const Context = @import("../context.zig").Context;
+pub const Context = @import("../core/context.zig").Context;
 pub const TemplateError = types.TemplateError;
 
 pub fn renderTemplate(

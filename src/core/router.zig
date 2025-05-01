@@ -1,11 +1,15 @@
 // zttp/src/router.zig
 const std = @import("std");
-const Request = @import("request.zig").Request;
-const Response = @import("response.zig").Response;
+
 const Context = @import("context.zig").Context;
-const WebSocket = @import("websocket/mod.zig").WebSocket;
-const HttpMethod = @import("zttp.zig").HttpMethod;
-const AsyncContext = @import("async/async.zig").Context;
+
+const http = @import("../http/mod.zig");
+const Request = http.Request;
+const Response = http.Response;
+const HttpMethod = http.HttpMethod;
+
+const WebSocket = @import("../websocket/mod.zig").WebSocket;
+const AsyncContext = @import("../async/async.zig").Context;
 
 pub const HandlerFn = *const fn (*Request, *Response, *Context) void;
 pub const MiddlewareFn = *const fn (*Request, *Response, *Context, NextFn) void;

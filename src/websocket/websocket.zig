@@ -1,3 +1,4 @@
+// src/websocket/websocket.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const WebSocketTransport = @import("transport.zig").WebSocketTransport;
@@ -15,8 +16,18 @@ pub const WebSocket = struct {
     options: Options,
 
     pub const Options = struct {
+        /// Maximum payload size for incoming frames (in bytes).
         max_payload_size: u64 = 1024 * 1024, // 1MB
+        /// Buffer size for reading data from the socket (in bytes).
         read_buffer_size: usize = 4096,
+        /// Whether to support fragmented frames (not supported by default).
+        support_fragmented_frames: bool = false,
+        /// Initial capacity for the frame buffer (in bytes).
+        frame_buffer_initial_capacity: usize = 4096,
+        /// Initial capacity for the payload buffer (in bytes).
+        payload_buffer_initial_capacity: usize = 4096,
+        /// Custom close code for application-specific closures (null for protocol defaults).
+        custom_close_code: ?u16 = null,
     };
 
     /// Initializes a WebSocket with a transport layer.

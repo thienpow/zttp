@@ -1,24 +1,32 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const AsyncIo = @import("async/async.zig").AsyncIo;
-const Task = @import("async/task.zig").Task;
-const Timespec = @import("async/async.zig").Timespec;
+
 const Server = @import("server.zig").Server;
-const Request = @import("request.zig").Request;
-const Response = @import("response.zig").Response;
-const StatusCode = @import("response.zig").StatusCode;
 const Context = @import("context.zig").Context;
-const websocket = @import("websocket/mod.zig");
+
+const router = @import("router.zig");
+const HandlerFn = router.HandlerFn;
+const WebSocketHandlerFn = router.WebSocketHandlerFn;
+
+const AsyncIo = @import("../async/async.zig").AsyncIo;
+const Task = @import("../async/task.zig").Task;
+const Timespec = @import("../async/async.zig").Timespec;
+
+const http = @import("../http/mod.zig");
+const Request = http.Request;
+const Response = http.Response;
+const StatusCode = http.StatusCode;
+
+const websocket = @import("../websocket/mod.zig");
 const WebSocket = websocket.WebSocket;
 const WebSocketTransport = websocket.WebSocketTransport;
 const WebSocketConnection = websocket.WebSocketConnection;
 const computeAcceptKey = websocket.computeAcceptKey;
-const middleware = @import("middleware.zig");
+
+const middleware = @import("../middleware/mod.zig");
 const MiddlewareContext = middleware.MiddlewareContext;
-const Template = @import("template/main.zig");
-const utils = @import("utils.zig");
-const HandlerFn = @import("router.zig").HandlerFn;
-const WebSocketHandlerFn = @import("router.zig").WebSocketHandlerFn;
+const Template = @import("../template/main.zig");
+const utils = @import("../utils.zig");
 
 const log = std.log.scoped(.connection);
 

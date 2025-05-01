@@ -3,7 +3,7 @@ const std = @import("std");
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const Context = @import("context.zig").Context;
-const WebSocket = @import("websocket.zig").WebSocket;
+const WebSocket = @import("websocket/mod.zig").WebSocket;
 const HttpMethod = @import("zttp.zig").HttpMethod;
 const AsyncContext = @import("async/async.zig").Context;
 

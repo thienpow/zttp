@@ -1,4 +1,3 @@
-// src/server.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const AsyncIo = @import("async/async.zig").AsyncIo;
@@ -8,7 +7,7 @@ const HttpMethod = @import("request.zig").HttpMethod;
 const HandlerFn = @import("router.zig").HandlerFn;
 const WebSocketHandlerFn = @import("router.zig").WebSocketHandlerFn;
 const MiddlewareFn = @import("router.zig").MiddlewareFn;
-const WebSocket = @import("websocket.zig").WebSocket;
+const websocket = @import("websocket/mod.zig");
 const Connection = @import("connection.zig").Connection;
 const log = std.log.scoped(.server);
 
@@ -24,7 +23,7 @@ pub const Server = struct {
 
     pub const Options = struct {
         port: u16 = 8088,
-        websocket_options: WebSocket.Options = .{},
+        websocket_options: websocket.WebSocket.Options = .{},
         async_ring_entries: u16 = 1024, // Increased for browser workloads
         max_connections: usize = 100, // Limit concurrent connections
         header_read_timeout_ms: u64 = 30_000,

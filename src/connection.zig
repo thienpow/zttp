@@ -1,4 +1,3 @@
-// src/connection.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const AsyncIo = @import("async/async.zig").AsyncIo;
@@ -9,8 +8,11 @@ const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const StatusCode = @import("response.zig").StatusCode;
 const Context = @import("context.zig").Context;
-const WebSocket = @import("websocket.zig").WebSocket;
-const WebSocketConnection = @import("websocket.zig").WebSocketConnection;
+const websocket = @import("websocket/mod.zig");
+const WebSocket = websocket.WebSocket;
+const WebSocketTransport = websocket.WebSocketTransport;
+const WebSocketConnection = websocket.WebSocketConnection;
+const computeAcceptKey = websocket.computeAcceptKey;
 const middleware = @import("middleware.zig");
 const MiddlewareContext = middleware.MiddlewareContext;
 const Template = @import("template/main.zig");
@@ -510,7 +512,7 @@ fn handleWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
     try res.setHeader("Connection", "Upgrade");
 
     const ws_key = req.headers.get("Sec-WebSocket-Key") orelse return error.InvalidWebSocketKey;
-    const ws_accept = try WebSocket.computeAcceptKey(conn.allocator, ws_key);
+    const ws_accept = try computeAcceptKey(conn.allocator, ws_key);
     defer conn.allocator.free(ws_accept);
     try res.setHeader("Sec-WebSocket-Accept", ws_accept);
 
@@ -529,8 +531,11 @@ fn completeWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
     const ws_ctx = task_data.ws_ctx orelse return error.NoWebSocketContext;
     const ws_handler = task_data.ws_handler orelse return error.NoWebSocketHandler;
 
-    const ws = try WebSocket.init(conn.fd, conn.allocator, conn.server.options.websocket_options, conn.server.async_io.?);
-    const ws_conn = try WebSocketConnection.init(conn.server, ws.*, ws_ctx, ws_handler, conn.allocator);
+    const transport = try WebSocketTransport.init(conn.fd, conn.allocator, conn.server.async_io.?);
+    errdefer transport.deinit();
+    const ws = try WebSocket.init(transport, conn.allocator, conn.server.options.websocket_options);
+    errdefer ws.deinit();
+    _ = try WebSocketConnection.init(conn.server, ws, transport, ws_ctx, ws_handler, conn.allocator);
 
     try conn.server.websocket_fds.put(conn.fd, {});
     conn.state = .websocket_active;
@@ -538,9 +543,6 @@ fn completeWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
     task_data.ws_ctx = null;
     task_data.ws_handler = null;
     task_data.request_buffer.deinit();
-
-    log.info("WebSocket upgraded on FD {d}", .{conn.fd});
-    try ws_conn.startReading();
 }
 
 fn handleClose(_: *AsyncIo, task: *Task) !void {

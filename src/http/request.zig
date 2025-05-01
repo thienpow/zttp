@@ -1,4 +1,4 @@
-// src/request.zig
+// request.zig
 const std = @import("std");
 
 const cookie = @import("cookie.zig");

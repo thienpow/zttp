@@ -476,29 +476,26 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) !void {
     if (conn.state == .sending_response and task_data.req != null and task_data.req.?.isWebSocketUpgrade()) {
         conn.state = .upgrading_websocket;
         try completeWebSocketUpgrade(task_data);
-    } else {
-        if (task_data.req) |*req| {
-            const is_keep_alive = req.isKeepAlive();
-            req.deinit();
-            task_data.req = null;
+    } else if (task_data.req) |*req| {
+        const is_keep_alive = req.isKeepAlive();
+        req.deinit();
+        task_data.req = null;
 
-            if (is_keep_alive) {
-                log.debug("Keep-alive on FD {d}", .{conn.fd});
-                conn.state = .reading_request;
-                task_data.request_buffer.clearAndFree();
-                try conn.readNext();
-            } else {
-                log.debug("Closing connection on FD {d}", .{conn.fd});
-                conn.state = .closing;
-                _ = conn.server.connections.remove(conn.fd);
-                try conn.asyncClose();
-            }
+        if (is_keep_alive) {
+            log.debug("Keep-alive on FD {d}", .{conn.fd});
+            conn.state = .reading_request;
+            try conn.readNext();
         } else {
-            log.err("No request after write on FD {d}", .{conn.fd});
+            log.debug("Closing connection on FD {d}", .{conn.fd});
             conn.state = .closing;
             _ = conn.server.connections.remove(conn.fd);
             try conn.asyncClose();
         }
+    } else {
+        log.err("No request after write on FD {d}", .{conn.fd});
+        conn.state = .closing;
+        _ = conn.server.connections.remove(conn.fd);
+        try conn.asyncClose();
     }
 }
 

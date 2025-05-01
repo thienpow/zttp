@@ -1,4 +1,4 @@
-// src/response.zig
+// response.zig
 const std = @import("std");
 const Request = @import("request.zig").Request;
 const cookie = @import("cookie.zig");

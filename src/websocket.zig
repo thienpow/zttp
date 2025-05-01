@@ -1,6 +1,7 @@
 // src/websocket.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const posix = std.posix;
 const Context = @import("context.zig").Context;
 const WebSocketHandlerFn = @import("router.zig").WebSocketHandlerFn;
 const Server = @import("server.zig").Server;
@@ -12,11 +13,11 @@ const log = std.log.scoped(.websocket);
 
 /// WebSocket connection over a socket, using async I/O.
 pub const WebSocket = struct {
-    socket: std.posix.fd_t,
+    fd: posix.fd_t,
     allocator: Allocator,
+    async_io: *AsyncIo,
     is_open: bool,
     options: Options,
-    async_io: *AsyncIo,
 
     pub const Options = struct {
         max_payload_size: u64 = 1024 * 1024, // 1MB
@@ -24,32 +25,47 @@ pub const WebSocket = struct {
     };
 
     /// Initializes a WebSocket over the given socket.
-    pub fn init(socket: std.posix.fd_t, allocator: Allocator, options: Options, async_io: *AsyncIo) WebSocket {
-        return .{
-            .socket = socket,
+    pub fn init(socket: posix.fd_t, allocator: Allocator, options: Options, async_io: *AsyncIo) !*WebSocket {
+        const ws = try allocator.create(WebSocket);
+        errdefer allocator.destroy(ws);
+        ws.* = .{
+            .fd = socket,
             .allocator = allocator,
+            .async_io = async_io,
             .is_open = true,
             .options = options,
-            .async_io = async_io,
         };
+        return ws;
     }
 
     /// Deinitializes the WebSocket, freeing resources.
-    pub fn deinit(_: *WebSocket) void {
-        // No dynamic resources to free in WebSocket struct
+    pub fn deinit(_: *WebSocket) void {}
+
+    pub fn computeAcceptKey(allocator: Allocator, key: []const u8) ![]u8 {
+        const uuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+        var hasher = std.crypto.hash.Sha1.init(.{});
+        hasher.update(key);
+        hasher.update(uuid);
+        var hash: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
+        hasher.final(&hash);
+
+        const encoded = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(hash.len));
+        errdefer allocator.free(encoded);
+        _ = std.base64.standard.Encoder.encode(encoded, &hash);
+        return encoded;
     }
 
     /// Schedules an async read into the buffer.
     pub fn readAsync(self: *WebSocket, buffer: []u8, ctx: AsyncContext) !void {
         if (!self.is_open) {
-            log.err("Attempted to read from closed WebSocket (FD: {d})", .{self.socket});
+            log.err("Attempted to read from closed WebSocket (FD: {d})", .{self.fd});
             return error.WebSocketClosed;
         }
-        if (self.socket <= 0) {
-            log.err("Invalid socket FD: {d}", .{self.socket});
+        if (self.fd <= 0) {
+            log.err("Invalid socket FD: {d}", .{self.fd});
             return error.InvalidSocket;
         }
-        _ = try self.async_io.recv(self.socket, buffer, ctx);
+        _ = try self.async_io.recv(self.fd, buffer, ctx);
     }
 
     /// Sends a WebSocket frame asynchronously.
@@ -83,7 +99,7 @@ pub const WebSocket = struct {
         const frame_data = try self.allocator.dupe(u8, frame.items);
         errdefer self.allocator.free(frame_data);
 
-        _ = try self.async_io.write(self.socket, frame_data, ctx);
+        _ = try self.async_io.write(self.fd, frame_data, ctx);
     }
 
     /// Sends a text message asynchronously.
@@ -99,9 +115,9 @@ pub const WebSocket = struct {
 
         self.is_open = false;
 
-        if (self.socket > 0) {
-            _ = self.async_io.close(self.socket, ctx) catch |err| {
-                log.err("Failed to submit async close for FD: {d}: {any}", .{ self.socket, err });
+        if (self.fd > 0) {
+            _ = self.async_io.close(self.fd, ctx) catch |err| {
+                log.err("Failed to submit async close for FD: {d}: {any}", .{ self.fd, err });
             };
         }
     }
@@ -181,8 +197,8 @@ pub const WebSocketConnection = struct {
             return;
         }
 
-        if (self.ws.socket <= 0) {
-            log.err("Invalid socket FD: {d}", .{self.ws.socket});
+        if (self.ws.fd <= 0) {
+            log.err("Invalid socket FD: {d}", .{self.ws.fd});
             self.state = .closed;
             return error.InvalidSocket;
         }
@@ -200,14 +216,14 @@ pub const WebSocketConnection = struct {
         task.* = .{
             .userdata = self,
             .callback = handleReadCompletion,
-            .req = .{ .recv = .{ .fd = self.ws.socket, .buffer = buf } },
+            .req = .{ .recv = .{ .fd = self.ws.fd, .buffer = buf } },
         };
         self.ws.async_io.submission_q.push(task);
     }
 
     /// Sends a protocol error close frame and initiates async close.
     fn sendProtocolError(self: *WebSocketConnection, msg: []const u8) !void {
-        log.warn("{s} on FD: {d}", .{ msg, self.ws.socket });
+        log.warn("{s} on FD: {d}", .{ msg, self.ws.fd });
         if (!self.ws.is_open or self.state == .closed) {
             return;
         }
@@ -230,7 +246,7 @@ pub const WebSocketConnection = struct {
     /// Sends a message too big close frame and initiates async close.
     fn sendMessageTooBig(self: *WebSocketConnection) !void {
         log.warn("Payload length ({d}) exceeds max_payload_size ({d}) on FD: {d}", .{
-            self.payload_len, self.ws.options.max_payload_size, self.ws.socket,
+            self.payload_len, self.ws.options.max_payload_size, self.ws.fd,
         });
         if (!self.ws.is_open or self.state == .closed) {
             return;
@@ -294,7 +310,7 @@ pub const WebSocketConnection = struct {
 
             switch (self.opcode) {
                 0x8 => { // Close
-                    log.info("Close frame received (FD: {d})", .{self.ws.socket});
+                    log.info("Close frame received (FD: {d})", .{self.ws.fd});
                     if (self.ws.is_open and self.state != .closed) {
                         var close_payload = std.ArrayList(u8).init(self.allocator);
                         defer close_payload.deinit();
@@ -335,7 +351,7 @@ pub const WebSocketConnection = struct {
         } else if (self.opcode == 0x1 or self.opcode == 0x2) { // Data frames
             if (self.opcode == 0x1 and !std.unicode.utf8ValidateSlice(self.payload_buffer.items)) {
                 log.warn("Invalid UTF-8 in text frame (FD: {d}): {x}", .{
-                    self.ws.socket, self.payload_buffer.items,
+                    self.ws.fd, self.payload_buffer.items,
                 });
                 var close_payload = std.ArrayList(u8).init(self.allocator);
                 defer close_payload.deinit();
@@ -363,6 +379,44 @@ pub const WebSocketConnection = struct {
             try self.sendProtocolError("Unsupported opcode");
         }
     }
+
+    /// Sends a Ping frame asynchronously.
+    /// An empty payload is typically used for a simple liveness check.
+    /// Payload must not exceed 125 bytes (control frame limit).
+    pub fn sendPingAsync(self: *WebSocketConnection, payload: []const u8, ctx: AsyncContext) !void {
+        if (!self.ws.is_open or self.state == .closed) {
+            // Connection is already closing or closed, no need to send.
+            log.warn("Attempted to send ping on closed connection (FD: {d})", .{self.ws.fd});
+            return error.WebSocketClosed; // Use the error defined in WebSocket struct
+        }
+        if (payload.len > 125) {
+            log.err("Ping payload exceeds max control frame size (125 bytes) ({d} > 125) (FD: {d})", .{ payload.len, self.ws.fd });
+            // You might need to define a specific error like error.InvalidPayloadSize
+            // For now, let's return a generic error or add a new one.
+            // Assuming InvalidPayloadSize error exists or define it.
+            return error.InvalidPayloadSize;
+        }
+        log.debug("Sending Ping (FD: {d})", .{self.ws.fd});
+        try self.ws.sendFrameAsync(0x9, payload, ctx);
+    }
+
+    /// Sends an unsolicited Pong frame asynchronously.
+    /// Note: Standard Pong frames are usually sent in response to a Ping.
+    /// Payload must not exceed 125 bytes (control frame limit).
+    pub fn sendPongAsync(self: *WebSocketConnection, payload: []const u8, ctx: AsyncContext) !void {
+        if (!self.ws.is_open or self.state == .closed) {
+            // Connection is already closing or closed, no need to send.
+            log.warn("Attempted to send pong on closed connection (FD: {d})", .{self.ws.fd});
+            return error.WebSocketClosed; // Use the error defined in WebSocket struct
+        }
+        if (payload.len > 125) {
+            log.err("Pong payload exceeds max control frame size (125 bytes) ({d} > 125) (FD: {d})", .{ payload.len, self.ws.fd });
+            // Assuming InvalidPayloadSize error exists or define it.
+            return error.InvalidPayloadSize;
+        }
+        log.debug("Sending Pong (unsolicited) (FD: {d})", .{self.ws.fd});
+        try self.ws.sendFrameAsync(0xA, payload, ctx);
+    }
 };
 
 /// Handles completion of async read tasks.
@@ -372,7 +426,7 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
 
     const bytes_read = result.recv catch |err| {
         log.err("WebSocket read error (state: {s}, FD: {d}): {any}", .{
-            @tagName(conn.state), conn.ws.socket, err,
+            @tagName(conn.state), conn.ws.fd, err,
         });
         conn.state = .closed;
         if (conn.ws.is_open) {
@@ -387,7 +441,7 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
     };
 
     if (bytes_read == 0) {
-        log.info("WebSocket connection closed by peer (FD: {d})", .{conn.ws.socket});
+        log.info("WebSocket connection closed by peer (FD: {d})", .{conn.ws.fd});
         conn.state = .closed;
         if (conn.ws.is_open) {
             conn.ws.close(AsyncContext{
@@ -413,7 +467,7 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
                 conn.payload_len = @as(u64, header[1] & 0x7F);
 
                 if (!mask_bit) {
-                    log.err("Unmasked frame received (FD: {d})", .{conn.ws.socket});
+                    log.err("Unmasked frame received (FD: {d})", .{conn.ws.fd});
                     try conn.sendProtocolError("Unmasked frame received");
                     return;
                 }
@@ -443,7 +497,7 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
                 const len_bytes = conn.frame_buffer.items[2..required_len];
                 if (conn.payload_len == 126) { // header_size == 8
                     if (len_bytes.len < 2) {
-                        log.err("Incomplete extended length (FD: {d}): {x}", .{ conn.ws.socket, len_bytes });
+                        log.err("Incomplete extended length (FD: {d}): {x}", .{ conn.ws.fd, len_bytes });
                         try conn.sendProtocolError("Incomplete extended length");
                         return;
                     }
@@ -451,7 +505,7 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
                     conn.payload_len = std.mem.readInt(u16, fixed_len_bytes, .big);
                 } else { // payload_len == 127, header_size == 14
                     if (len_bytes.len < 8) {
-                        log.err("Incomplete extended length (FD: {d}): {x}", .{ conn.ws.socket, len_bytes });
+                        log.err("Incomplete extended length (FD: {d}): {x}", .{ conn.ws.fd, len_bytes });
                         try conn.sendProtocolError("Incomplete extended length");
                         return;
                     }
@@ -460,7 +514,7 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) anyerror!void {
                 }
                 if (conn.payload_len > conn.ws.options.max_payload_size) {
                     log.err("Payload length {d} exceeds max_payload_size {d} (FD: {d})", .{
-                        conn.payload_len, conn.ws.options.max_payload_size, conn.ws.socket,
+                        conn.payload_len, conn.ws.options.max_payload_size, conn.ws.fd,
                     });
                     try conn.sendMessageTooBig();
                     return;
@@ -501,7 +555,7 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) anyerror!void {
     const result = task.result orelse return error.NoResult;
 
     _ = result.write catch |err| {
-        log.err("Write error (FD: {d}): {any}", .{ conn.ws.socket, err });
+        log.err("Write error (FD: {d}): {any}", .{ conn.ws.fd, err });
         conn.state = .closed;
         if (conn.ws.is_open) {
             conn.ws.close(AsyncContext{
@@ -521,7 +575,7 @@ fn handleCloseCompletion(_: *AsyncIo, task: *Task) anyerror!void {
     const conn: *WebSocketConnection = @ptrCast(@alignCast(task.userdata));
     const result = task.result orelse return error.NoResult;
 
-    const socket = conn.ws.socket; // Store socket for logging
+    const socket = conn.ws.fd; // Store socket for logging
     _ = result.close catch |err| {
         log.err("Close error (FD: {d}): {any}", .{ socket, err });
     };

@@ -1,8 +1,18 @@
+// src/async/async.zig
 const std = @import("std");
 const builtin = @import("builtin");
 
 const Allocator = std.mem.Allocator;
 const posix = std.posix;
+
+pub const Timespec = extern struct {
+    sec: i64 = 0,
+    nsec: i64 = 0,
+
+    pub fn isZero(self: Timespec) bool {
+        return self.sec == 0 and self.nsec == 0;
+    }
+};
 
 pub const Queue = @import("queue.zig").Intrusive;
 pub const Backend = if (builtin.os.tag == .linux)
@@ -18,15 +28,6 @@ pub const Result = @import("op_request.zig").Result;
 pub const ResultError = @import("op_request.zig").ResultError;
 pub const CancelError = @import("op_request.zig").CancelError;
 pub const RecvError = @import("op_request.zig").RecvError;
-
-pub const Timespec = extern struct {
-    sec: i64 = 0,
-    nsec: i64 = 0,
-
-    pub fn isZero(self: Timespec) bool {
-        return self.sec == 0 and self.nsec == 0;
-    }
-};
 
 pub const Callback = *const fn (*AsyncIo, *Task) anyerror!void;
 pub fn noopCallback(_: *AsyncIo, _: *Task) anyerror!void {}
@@ -227,6 +228,17 @@ pub const AsyncIo = struct {
         };
         self.submission_q.push(task);
         return task;
+    }
+
+    pub fn cancel(self: *AsyncIo, task: *Task, ctx: Context) error{ OutOfMemory, TaskReuseError }!void {
+        const cancel_task = try self.getTask();
+        cancel_task.* = .{
+            .userdata = ctx.ptr,
+            .msg = ctx.msg,
+            .callback = ctx.cb,
+            .req = .{ .cancel = .{ .task = task } },
+        };
+        self.submission_q.push(cancel_task);
     }
 
     pub fn cancelAll(self: *AsyncIo) error{ OutOfMemory, TaskReuseError }!void {

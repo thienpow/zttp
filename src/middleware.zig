@@ -1,3 +1,4 @@
+// src/middleware.zig
 const std = @import("std");
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
@@ -14,6 +15,25 @@ pub const MiddlewareContext = struct {
     server: *Server,
     final_handler: *HandlerFn,
 };
+
+pub fn executeChain(req: *Request, res: *Response, ctx: *Context, middleware_ctx: *MiddlewareContext, final_handler: HandlerFn) !void {
+    if (middleware_ctx.middlewares.len == 0) {
+        final_handler(req, res, ctx);
+        return;
+    }
+
+    // Store middleware_ctx address in ctx
+    const context_addr_str = try std.fmt.allocPrint(ctx.allocator, "{x}", .{@intFromPtr(middleware_ctx)});
+    try ctx.set("middleware_context", context_addr_str);
+
+    // Update final_handler in middleware_ctx
+    middleware_ctx.final_handler.* = final_handler;
+
+    // Start the middleware chain
+    const mw = middleware_ctx.middlewares[0];
+    middleware_ctx.index = 1;
+    mw(req, res, ctx, callNextMiddleware);
+}
 
 pub fn callNextMiddleware(req: *Request, res: *Response, ctx: *Context) void {
     const context_addr_str = ctx.get("middleware_context") orelse {
@@ -35,5 +55,6 @@ pub fn callNextMiddleware(req: *Request, res: *Response, ctx: *Context) void {
         mw(req, res, ctx, callNextMiddleware);
     } else {
         context_ptr.final_handler.* = context_ptr.server.router.getHandler(req.method, req.path, ctx) orelse utils.notFound;
+        context_ptr.final_handler.*(req, res, ctx);
     }
 }

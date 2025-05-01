@@ -193,6 +193,7 @@ pub const StatusCode = enum(u16) {
     forbidden = 403,
     not_found = 404,
     method_not_allowed = 405,
+    payload_too_large = 413, // Added
     internal_server_error = 500,
     _,
 
@@ -213,6 +214,7 @@ pub const StatusCode = enum(u16) {
             .forbidden => "Forbidden",
             .not_found => "Not Found",
             .method_not_allowed => "Method Not Allowed",
+            .payload_too_large => "Payload Too Large", // Added
             .internal_server_error => "Internal Server Error",
             _ => "Unknown",
         };

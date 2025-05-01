@@ -113,11 +113,7 @@ pub const WebSocketConnection = struct {
             return;
         }
 
-        var close_payload = std.ArrayList(u8).init(self.allocator);
-        defer close_payload.deinit();
-        try close_payload.writer().writeInt(u16, 1002, .big); // Protocol error (1002)
-
-        try self.ws.sendFrameAsync(0x8, close_payload.items, AsyncContext{
+        try self.ws.sendCloseFrame(1002, msg, AsyncContext{
             .ptr = self,
             .cb = handleWriteCompletion,
         });
@@ -137,11 +133,7 @@ pub const WebSocketConnection = struct {
             return;
         }
 
-        var close_payload = std.ArrayList(u8).init(self.allocator);
-        defer close_payload.deinit();
-        try close_payload.writer().writeInt(u16, 1009, .big); // Message Too Big (1009)
-
-        try self.ws.sendFrameAsync(0x8, close_payload.items, AsyncContext{
+        try self.ws.sendCloseFrame(1009, "Message too big", AsyncContext{
             .ptr = self,
             .cb = handleWriteCompletion,
         });
@@ -152,17 +144,44 @@ pub const WebSocketConnection = struct {
         });
     }
 
+    /// Validates a WebSocket close code.
+    fn validateCloseCode(code: u16) bool {
+        return switch (code) {
+            1000, // Normal closure
+            1001, // Going away
+            1002, // Protocol error
+            1003, // Unsupported data
+            1007, // Invalid frame payload data
+            1008, // Policy violation
+            1009, // Message too big
+            1010, // Missing extension
+            1011, // Internal error
+            1012, // Service restart
+            1013, // Try again later
+            1014, // Bad gateway
+            1015, // TLS handshake
+            3000...3999, // Application-specific
+            4000...4999,
+            => true, // Reserved for private use
+            else => false,
+        };
+    }
+
     /// Processes a complete WebSocket frame.
     fn processFrame(self: *WebSocketConnection) !void {
         const frame = self.frame_buffer.items;
         self.fin = (frame[0] & 0x80) != 0;
-        const rsv_bits = (frame[0] >> 4) & 0x07;
+        const rsv1 = (frame[0] & 0x40) != 0;
+        const rsv2 = (frame[0] & 0x20) != 0;
+        const rsv3 = (frame[0] & 0x10) != 0;
         self.opcode = frame[0] & 0x0F;
 
-        if (rsv_bits != 0) {
-            try self.sendProtocolError("Non-zero RSV bits");
+        if (rsv2 or rsv3 or (rsv1 and !self.ws.extensions.permessage_deflate)) {
+            try self.sendProtocolError("Invalid RSV bits");
             return;
         }
+
+        self.ws.extensions.rsv1_used = rsv1;
 
         if (!self.ws.options.support_fragmented_frames and !self.fin and self.opcode < 0x8) {
             try self.sendProtocolError("Fragmented frames not supported");
@@ -185,21 +204,39 @@ pub const WebSocketConnection = struct {
             .cb = handleWriteCompletion,
         };
 
+        // Decompress payload if needed
+        const payload = try self.ws.decompressPayload(self.payload_buffer.items);
+        defer self.allocator.free(payload);
+
         if (self.opcode >= 0x8) { // Control frames
-            if (self.payload_len > 125) {
-                try self.sendProtocolError("Invalid control frame length");
+            if (self.payload_len > 125 or !self.fin) {
+                try self.sendProtocolError("Invalid control frame length or fragmentation");
                 return;
             }
 
             switch (self.opcode) {
                 0x8 => { // Close
                     log.info("Close frame received (FD: {d})", .{self.transport.fd});
+                    var close_code: u16 = 1000;
+                    var reason: ?[]const u8 = null;
+
+                    if (payload.len >= 2) {
+                        close_code = std.mem.readInt(u16, payload[0..2], .big);
+                        if (!validateCloseCode(close_code)) {
+                            try self.sendProtocolError("Invalid close code");
+                            return;
+                        }
+                        if (payload.len > 2) {
+                            reason = payload[2..];
+                            if (!std.unicode.utf8ValidateSlice(reason.?)) {
+                                try self.sendProtocolError("Invalid UTF-8 in close reason");
+                                return;
+                            }
+                        }
+                    }
+
                     if (self.ws.is_open and self.state != .closed) {
-                        var close_payload = std.ArrayList(u8).init(self.allocator);
-                        defer close_payload.deinit();
-                        const close_code = self.ws.options.custom_close_code orelse 1000; // Normal closure (1000) or custom
-                        try close_payload.writer().writeInt(u16, close_code, .big);
-                        try self.ws.sendFrameAsync(0x8, close_payload.items, ctx);
+                        try self.ws.sendCloseFrame(close_code, reason, ctx);
                         self.state = .closed;
                         self.ws.close(AsyncContext{
                             .ptr = self,
@@ -209,7 +246,7 @@ pub const WebSocketConnection = struct {
                 },
                 0x9 => { // Ping
                     if (self.ws.is_open and self.state != .closed) {
-                        try self.ws.sendPongAsync(self.payload_buffer.items, ctx);
+                        try self.ws.sendPongAsync(payload, ctx);
                         self.state = .reading_header;
                         self.frame_buffer.clearAndFree();
                         self.payload_buffer.clearRetainingCapacity();
@@ -232,24 +269,45 @@ pub const WebSocketConnection = struct {
                 },
                 else => try self.sendProtocolError("Unknown control opcode"),
             }
-        } else if (self.opcode == 0x1 or self.opcode == 0x2) { // Data frames
-            if (self.opcode == 0x1 and !std.unicode.utf8ValidateSlice(self.payload_buffer.items)) {
-                log.warn("Invalid UTF-8 in text frame (FD: {d}): {x}", .{
-                    self.transport.fd, self.payload_buffer.items,
-                });
-                var close_payload = std.ArrayList(u8).init(self.allocator);
-                defer close_payload.deinit();
-                try close_payload.writer().writeInt(u16, 1007, .big); // Invalid data (1007)
-                try self.ws.sendFrameAsync(0x8, close_payload.items, ctx);
-                self.state = .closed;
-                self.ws.close(AsyncContext{
-                    .ptr = self,
-                    .cb = handleCloseCompletion,
-                });
+        } else { // Data frames
+            if (self.opcode == 0x0) { // Continuation frame
+                if (self.ws.fragment_state.opcode == null) {
+                    try self.sendProtocolError("Continuation frame without initial frame");
+                    return;
+                }
+            } else if (self.opcode == 0x1 or self.opcode == 0x2) { // Text or Binary
+                if (self.ws.fragment_state.opcode != null) {
+                    try self.sendProtocolError("New data frame while fragment in progress");
+                    return;
+                }
+                self.ws.fragment_state.opcode = self.opcode;
+            } else {
+                try self.sendProtocolError("Unsupported opcode");
                 return;
             }
 
-            try self.handler(self.ws, self.payload_buffer.items, self.ctx, ctx);
+            try self.ws.fragment_state.buffer.appendSlice(payload);
+
+            if (self.fin) {
+                const message = self.ws.fragment_state.buffer.items;
+                if (self.opcode == 0x1 or self.ws.fragment_state.opcode == 0x1) {
+                    if (!std.unicode.utf8ValidateSlice(message)) {
+                        log.warn("Invalid UTF-8 in text frame (FD: {d}): {x}", .{
+                            self.transport.fd, message,
+                        });
+                        try self.ws.sendCloseFrame(1007, "Invalid UTF-8 data", ctx);
+                        self.state = .closed;
+                        self.ws.close(AsyncContext{
+                            .ptr = self,
+                            .cb = handleCloseCompletion,
+                        });
+                        return;
+                    }
+                }
+
+                try self.handler(self.ws, message, self.ctx, ctx);
+                self.ws.fragment_state.reset();
+            }
 
             self.state = .reading_header;
             self.frame_buffer.clearAndFree();
@@ -259,8 +317,6 @@ pub const WebSocketConnection = struct {
             self.payload_len = 0;
             self.header_size = 2;
             try self.readNext();
-        } else {
-            try self.sendProtocolError("Unsupported opcode");
         }
     }
 

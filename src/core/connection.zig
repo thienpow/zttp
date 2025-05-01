@@ -166,6 +166,7 @@ const ConnectionTaskData = struct {
     ws_handler: ?WebSocketHandlerFn = null,
     middleware_ctx: ?*MiddlewareContext = null,
     header_timer_task: ?*Task = null,
+    write_task_id: ?usize = null, // Track write task to prevent double processing
 
     pub fn init(allocator: Allocator, conn: *Connection) !*ConnectionTaskData {
         const ctx = try allocator.create(Context);
@@ -191,6 +192,7 @@ const ConnectionTaskData = struct {
             self.req = null;
         }
         if (self.res) |res| {
+            log.debug("Deinit task_data.res for FD {d} in ConnectionTaskData.deinit", .{self.conn.fd});
             res.deinit();
             allocator.destroy(res);
             self.res = null;
@@ -219,9 +221,18 @@ fn sendErrorAsync(task_data: *ConnectionTaskData, status: StatusCode, message: [
     const conn = task_data.conn;
     if (conn.state == .closed or conn.state == .closing) return;
 
+    // Clean up existing response if it exists
+    if (task_data.res) |res| {
+        log.debug("Cleaning up existing response for FD {d} before sending error", .{conn.fd});
+        res.deinit();
+        conn.allocator.destroy(res);
+        task_data.res = null;
+    }
+
     const res = try conn.allocator.create(Response);
     errdefer conn.allocator.destroy(res);
     res.* = Response.init(conn.allocator);
+    log.debug("Created new response for FD {d}: status={s}", .{ conn.fd, status.reason() });
     task_data.res = res;
     errdefer {
         res.deinit();
@@ -229,7 +240,7 @@ fn sendErrorAsync(task_data: *ConnectionTaskData, status: StatusCode, message: [
     }
 
     res.status = status;
-    try res.setBody(try conn.allocator.dupe(u8, message));
+    try res.setBody(message); // Avoid redundant allocation
 
     conn.state = .sending_response;
     try sendResponseAsync(task_data);
@@ -369,6 +380,7 @@ fn handleHttpRequest(task_data: *ConnectionTaskData) !void {
     const res = try conn.allocator.create(Response);
     errdefer conn.allocator.destroy(res);
     res.* = Response.init(conn.allocator);
+    log.debug("Created response for FD {d} in handleHttpRequest", .{conn.fd});
     task_data.res = res;
     errdefer {
         res.deinit();
@@ -407,6 +419,10 @@ fn handleHttpRequest(task_data: *ConnectionTaskData) !void {
             try res.setHeader("Content-Type", "text/plain; charset=utf-8");
         } else {
             if (res.status == .ok) res.status = .not_found;
+            // Clean up original response before sendErrorAsync
+            res.deinit();
+            conn.allocator.destroy(res);
+            task_data.res = null;
             try sendErrorAsync(task_data, res.status, "Not Found");
             return;
         }
@@ -422,7 +438,7 @@ fn sendResponseAsync(task_data: *ConnectionTaskData) !void {
     const res = task_data.res orelse return error.NoResponse;
 
     if (conn.state != .sending_response) {
-        log.debug("Invalid state for sending response on FD {d}: {}", .{ conn.fd, conn.state });
+        log.debug("Invalid state for sending response on FD {d}: {any}", .{ conn.fd, conn.state });
         return;
     }
 
@@ -433,6 +449,8 @@ fn sendResponseAsync(task_data: *ConnectionTaskData) !void {
         .callback = handleWriteCompletion,
         .req = .{ .write = .{ .fd = conn.fd, .buffer = buffer } },
     };
+    task_data.write_task_id = @intFromPtr(task);
+    log.debug("Submitting write task {any} for FD {d}", .{ task_data.write_task_id, conn.fd });
     conn.server.async_io.?.submission_q.push(task);
 }
 
@@ -440,21 +458,26 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) !void {
     const task_data: *ConnectionTaskData = @ptrCast(@alignCast(task.userdata));
     const conn = task_data.conn;
 
+    // Check if task was already processed
+    const task_id = @intFromPtr(task);
+    if (task_data.write_task_id != task_id) {
+        log.warn("Unexpected write task ID {d} for FD {d}; expected {any}. Ignoring.", .{
+            task_id, conn.fd, task_data.write_task_id,
+        });
+        return;
+    }
+    task_data.write_task_id = null; // Clear task ID
+
     if (task.req == .write) {
         conn.allocator.free(task.req.write.buffer);
     }
 
     const bytes_written = switch (task.result orelse return error.NoResult) {
         .write => |write_res| write_res catch |err| {
-            log.err("Write error on FD {d}: {}", .{ conn.fd, err });
+            log.err("Write error on FD {d}: {any}", .{ conn.fd, err });
             conn.state = .closing;
             _ = conn.server.connections.remove(conn.fd);
             try conn.asyncClose();
-            if (task_data.res) |res| {
-                res.deinit();
-                conn.allocator.destroy(res);
-                task_data.res = null;
-            }
             return;
         },
         else => {
@@ -467,10 +490,18 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) !void {
     };
     _ = bytes_written;
 
+    // Deinit response only if it exists and hasn't been deinitialized
     if (task_data.res) |res| {
-        res.deinit();
+        log.debug("Deinit response for FD {d}: status={s}, body_len={any}", .{
+            conn.fd,
+            res.status.reason(),
+            if (res.body) |b| b.len else null,
+        });
+        //res.deinit();
         conn.allocator.destroy(res);
         task_data.res = null;
+    } else {
+        log.warn("No response to deinit for FD {d} in handleWriteCompletion", .{conn.fd});
     }
 
     if (conn.state == .sending_response and task_data.req != null and task_data.req.?.isWebSocketUpgrade()) {
@@ -506,6 +537,7 @@ fn handleWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
     const res = try conn.allocator.create(Response);
     errdefer conn.allocator.destroy(res);
     res.* = Response.init(conn.allocator);
+    log.debug("Created response for FD {d} in handleWebSocketUpgrade", .{conn.fd});
     task_data.res = res;
     errdefer {
         res.deinit();
@@ -555,7 +587,7 @@ fn handleClose(_: *AsyncIo, task: *Task) !void {
 
     _ = switch (task.result orelse return error.NoResult) {
         .close => |res| res catch |err| {
-            log.err("Close error on FD {d}: {}", .{ conn.fd, err });
+            log.err("Close error on FD {d}: {any}", .{ conn.fd, err });
             return;
         },
         else => {

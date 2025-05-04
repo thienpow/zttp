@@ -2,13 +2,32 @@ const std = @import("std");
 const zttp = @import("zttp");
 const Server = zttp.Server;
 const WebSocket = zttp.WebSocket;
-const ThreadPool = zttp.ThreadPool;
+
+const redis = zttp.db.resp;
+var g_redis_pool: ?*redis.PooledRedisClient = null;
 
 pub fn main() !void {
     // Set up allocator
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
+
+    const redis_config = redis.RedisClientConfig{
+        .host = "127.0.0.1",
+        .port = 6379,
+        .max_connections = 10,
+        .timeout_ms = 2000, // Timeout for acquiring a connection
+        .idle_timeout_ms = 60000, // Disconnect idle connections after 60s
+        .read_timeout_ms = 2000, // Timeout for reading a response
+        // .password = "yourpassword", // Uncomment and set if needed
+        // .database = 0, // Uncomment and set if needed
+    };
+    var redis_pool = try redis.PooledRedisClient.init(allocator, redis_config);
+    defer redis_pool.deinit();
+
+    // var client = try redis_pool.acquire();
+    // defer redis_pool.release(client);
+    // try client.set("example_key", "example_value");
 
     // Server configuration
     const options = Server.Options{

@@ -4,6 +4,8 @@ const std = @import("std");
 const types = @import("types.zig");
 const errors = @import("errors.zig");
 pub const buffer_pool = @import("buffer_pool.zig");
+const commands_mod = @import("commands.zig");
+const response_mod = @import("response.zig");
 
 pub const RedisError = errors.RedisError;
 pub const RedisClientConfig = types.RedisClientConfig;
@@ -20,13 +22,17 @@ pub const RedisClient = struct {
 
     const Self = @This();
 
+    const Commands = commands_mod.Commands(Self);
+    pub usingnamespace Commands;
+    const ResponseHandling = response_mod.ResponseHandling(Self);
+    pub usingnamespace ResponseHandling;
+
     /// Establishes a new connection to Redis
     pub fn connect(allocator: std.mem.Allocator, config: RedisClientConfig) RedisError!Self {
         // Initialize buffer pool if not already initialized
         buffer_pool.initGlobalPool(allocator, 16, 4096) catch |err| switch (err) {
             error.AlreadyInitialized => {}, // Ignore if already initialized
             error.OutOfMemory => return RedisError.OutOfMemory,
-            else => return RedisError.ConnectionFailed,
         };
 
         const address = std.net.Address.parseIp(config.host, config.port) catch {
@@ -101,7 +107,6 @@ pub const RedisClient = struct {
                     return switch (err) {
                         error.ConnectionRefused => RedisError.ConnectionRefused,
                         error.NetworkUnreachable => RedisError.NetworkError,
-                        error.OutOfMemory => RedisError.OutOfMemory,
                         else => RedisError.ReconnectFailed,
                     };
                 }
@@ -148,8 +153,4 @@ pub const RedisClient = struct {
             else => return RedisError.NetworkError,
         };
     }
-
-    // Import commands and response handling
-    pub usingnamespace @import("commands.zig");
-    pub usingnamespace @import("response.zig");
 };

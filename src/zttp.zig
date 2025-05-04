@@ -25,6 +25,9 @@ const websocket = @import("websocket/mod.zig");
 pub const WebSocket = websocket.WebSocket;
 
 const cache = @import("template/cache.zig");
+const db_mod = @import("db/mod.zig");
+
+pub const db = db_mod;
 
 pub const LogLevel = enum {
     debug,

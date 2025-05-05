@@ -1,4 +1,13 @@
 // src/async/async.zig
+//
+// Portions of the async I/O backend code in this file (including related files
+// like io_uring.zig and kqueue.zig) are derived from and inspired by the
+// 'ourio' project by Tim Culverhouse (@rockorager).
+// Original repository: https://github.com/rockorager/ourio
+//
+// This code is subject to the terms of the MIT License, the full text of which
+// is included in the project's main LICENSE.md file.
+
 const std = @import("std");
 const builtin = @import("builtin");
 

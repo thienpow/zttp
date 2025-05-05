@@ -13,3 +13,6 @@ ZTTP, async (io_uring only) http server for zig. WebSocket Ready. Multi-threaded
 *   Add health checks or monitoring capabilities.
 *   Implement robust graceful shutdown, waiting for active connections and tasks to complete.
 *   Add comprehensive unit and integration tests.
+
+Credits:
+*   Async I/O backend inspired by the `ourio` project ([https://github.com/rockorager/ourio](https://github.com/rockorager/ourio)) by Tim Culverhouse (@rockorager). Please see `LICENSE.md` for full license details.

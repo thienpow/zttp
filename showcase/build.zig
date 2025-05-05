@@ -24,6 +24,13 @@ pub fn build(b: *std.Build) void {
 
     routegen_step.dependOn(&run_routegen.step);
 
+    const app_module = b.createModule(.{
+        .root_source_file = b.path("src/app_context.zig"),
+        .target = target, // Pass target and optimize options
+        .optimize = optimize,
+    });
+    app_module.addImport("zttp", zttp_module);
+
     // Executable
     const exe = b.addExecutable(.{
         .name = "showcase",
@@ -31,7 +38,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-
+    exe.root_module.addImport("app", app_module);
     exe.root_module.addImport("zttp", zttp_module);
     exe.step.dependOn(routegen_step); // Ensure routes are generated
 

@@ -3,8 +3,7 @@ const zttp = @import("zttp");
 const Server = zttp.Server;
 const WebSocket = zttp.WebSocket;
 
-const redis = zttp.db.resp;
-var g_redis_pool: ?*redis.PooledRedisClient = null;
+const app = @import("app");
 
 pub fn main() !void {
     // Set up allocator
@@ -12,35 +11,21 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const redis_config = redis.RedisClientConfig{
-        .host = "127.0.0.1",
-        .port = 6379,
-        .max_connections = 10,
-        .timeout_ms = 2000, // Timeout for acquiring a connection
-        .idle_timeout_ms = 60000, // Disconnect idle connections after 60s
-        .read_timeout_ms = 2000, // Timeout for reading a response
-        // .password = "yourpassword", // Uncomment and set if needed
-        // .database = 0, // Uncomment and set if needed
-    };
-    var redis_pool = try redis.PooledRedisClient.init(allocator, redis_config);
-    defer redis_pool.deinit();
-
-    // var client = try redis_pool.acquire();
-    // defer redis_pool.release(client);
-    // try client.set("example_key", "example_value");
+    var app_ctx = try app.AppContext.init(allocator);
+    errdefer app_ctx.deinit();
 
     // Server configuration
     const options = Server.Options{
+        .app_context_ptr = app_ctx, //here we pass the custom application context pointer, code is in app_context.zig
         .port = 8088,
-
-        .websocket_options = WebSocket.Options{
+        .websocket = WebSocket.Options{
             .max_payload_size = 2 * 1024 * 1024,
             .read_buffer_size = 4096,
         },
     };
 
-    // Create the server, 2 instance on same port
-    var bundle = try zttp.createServer(allocator, options, 2);
+    // Create the server, 3 instance on same port
+    var bundle = try zttp.createServer(allocator, options, 3);
     defer bundle.deinit();
 
     // Add middleware

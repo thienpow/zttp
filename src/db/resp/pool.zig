@@ -95,7 +95,7 @@ pub const PooledRedisClient = struct {
 
             const timeout_ns = self.config.timeout_ms * std.time.ns_per_ms;
             self.condition.timedWait(&self.mutex, timeout_ns) catch |err| switch (err) {
-                error.Timeout => return RedisError.PoolExhausted,
+                //error.Timeout => return RedisError.PoolExhausted,
                 else => |e| return e,
             };
         }

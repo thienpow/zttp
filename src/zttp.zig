@@ -89,7 +89,7 @@ pub const ServerBundle = struct {
 
     pub fn start(self: *ServerBundle) !void {
         var threads = try self.allocator.alloc(std.Thread, self.servers.len);
-        defer self.allocator.free(threads);
+        errdefer self.allocator.free(threads);
 
         for (0..self.servers.len) |i| {
             threads[i] = try std.Thread.spawn(.{}, startServerThread, .{ self, i });

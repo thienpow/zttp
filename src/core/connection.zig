@@ -62,7 +62,9 @@ pub const Connection = struct {
         const connection = try allocator.create(Connection);
         errdefer allocator.destroy(connection);
 
-        const task_data = try ConnectionTaskData.init(allocator, connection);
+        // must pass app_context_ptr like this, because connection object is refilled later, and ConnectionTaskData needed app_context_ptr earlier...
+        // so don't refactor this on first impression.
+        const task_data = try ConnectionTaskData.init(allocator, connection, server.options.app_context_ptr);
         errdefer task_data.deinit(allocator);
 
         connection.* = .{
@@ -168,10 +170,11 @@ const ConnectionTaskData = struct {
     header_timer_task: ?*Task = null,
     write_task_id: ?usize = null, // Track write task to prevent double processing
 
-    pub fn init(allocator: Allocator, conn: *Connection) !*ConnectionTaskData {
+    pub fn init(allocator: Allocator, conn: *Connection, app_context_ptr: *anyopaque) !*ConnectionTaskData {
         const ctx = try allocator.create(Context);
         errdefer allocator.destroy(ctx);
         ctx.* = Context.init(allocator);
+        ctx.app_context_ptr = app_context_ptr;
 
         const data = try allocator.create(ConnectionTaskData);
         data.* = .{
@@ -570,7 +573,7 @@ fn completeWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
 
     const transport = try WebSocketTransport.init(conn.fd, conn.allocator, conn.server.async_io.?);
     errdefer transport.deinit();
-    const ws = try WebSocket.init(transport, conn.allocator, conn.server.options.websocket_options);
+    const ws = try WebSocket.init(transport, conn.allocator, conn.server.options.websocket);
     errdefer ws.deinit();
     _ = try WebSocketConnection.init(conn.server, ws, transport, ws_ctx, ws_handler, conn.allocator);
 

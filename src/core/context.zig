@@ -4,11 +4,13 @@ const std = @import("std");
 pub const Context = struct {
     allocator: std.mem.Allocator,
     data: std.StringHashMap([]const u8),
+    app_context_ptr: ?*anyopaque,
 
     pub fn init(allocator: std.mem.Allocator) Context {
         return .{
             .allocator = allocator,
             .data = std.StringHashMap([]const u8).init(allocator),
+            .app_context_ptr = null,
         };
     }
 
@@ -67,5 +69,16 @@ pub const Context = struct {
             return true;
         }
         return false;
+    }
+
+    pub fn getApp(self: *Context, comptime T: type) ?*T {
+        // Safety: This cast is inherently unsafe; the caller must ensure
+        // the pointer is actually of type T. If the pointer is null,
+        // or the type T is incorrect, behavior is undefined.
+        // We return an optional pointer to indicate if app_context_ptr was null.
+        if (self.app_context_ptr) |ptr| {
+            return @ptrCast(@alignCast(ptr));
+        }
+        return null;
     }
 };

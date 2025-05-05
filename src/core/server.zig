@@ -27,11 +27,12 @@ pub const Server = struct {
     connections: std.AutoHashMap(std.posix.fd_t, *Connection),
 
     pub const Options = struct {
+        app_context_ptr: *anyopaque,
         port: u16 = 8088,
-        websocket_options: websocket.WebSocket.Options = .{},
         async_ring_entries: u16 = 1024, // Increased for browser workloads
         max_connections: usize = 100, // Limit concurrent connections
         header_read_timeout_ms: u64 = 1000,
+        websocket: websocket.WebSocket.Options = .{},
     };
 
     pub fn init(allocator: Allocator, options: Options) !Server {

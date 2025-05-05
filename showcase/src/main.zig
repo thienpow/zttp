@@ -2,7 +2,8 @@ const std = @import("std");
 const zttp = @import("zttp");
 const Server = zttp.Server;
 const WebSocket = zttp.WebSocket;
-const ThreadPool = zttp.ThreadPool;
+
+const app = @import("app");
 
 pub fn main() !void {
     // Set up allocator
@@ -10,18 +11,21 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    var app_ctx = try app.AppContext.init(allocator);
+    errdefer app_ctx.deinit();
+
     // Server configuration
     const options = Server.Options{
+        .app_context_ptr = app_ctx, //here we pass the custom application context pointer, code is in app_context.zig
         .port = 8088,
-
-        .websocket_options = WebSocket.Options{
+        .websocket = WebSocket.Options{
             .max_payload_size = 2 * 1024 * 1024,
             .read_buffer_size = 4096,
         },
     };
 
-    // Create the server, 2 instance on same port
-    var bundle = try zttp.createServer(allocator, options, 2);
+    // Create the server, 3 instance on same port
+    var bundle = try zttp.createServer(allocator, options, 3);
     defer bundle.deinit();
 
     // Add middleware

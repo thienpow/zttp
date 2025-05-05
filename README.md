@@ -1,5 +1,9 @@
 ZTTP, async (io_uring only) http server for zig. WebSocket Ready. Multi-threaded Ready, streaming (soon)...
 
+Credits:
+*   The inspiration for building a comprehensive web framework in Zig, particularly the concept of integrating with modern frontend approaches like HTMX, is attributed to the Jetzig framework ([https://github.com/jetzig-framework/jetzig](https://github.com/jetzig-framework/jetzig)) and the pioneering work of its core contributor, @bobf. While no code was directly copied, this project's broader goal was shaped by Jetzig's innovative approach to building web applications in Zig.
+*   Async I/O backend inspired by the `ourio` project ([https://github.com/rockorager/ourio](https://github.com/rockorager/ourio)) by Tim Culverhouse (@rockorager). Please see `LICENSE.md` for full license details.
+
 # TODO:
 *   Implement support for HTTP/2, or HTTP/3.
 *   Add handling for HTTP request body streaming instead of full buffer.
@@ -13,6 +17,3 @@ ZTTP, async (io_uring only) http server for zig. WebSocket Ready. Multi-threaded
 *   Add health checks or monitoring capabilities.
 *   Implement robust graceful shutdown, waiting for active connections and tasks to complete.
 *   Add comprehensive unit and integration tests.
-
-Credits:
-*   Async I/O backend inspired by the `ourio` project ([https://github.com/rockorager/ourio](https://github.com/rockorager/ourio)) by Tim Culverhouse (@rockorager). Please see `LICENSE.md` for full license details.

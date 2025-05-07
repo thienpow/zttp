@@ -22,7 +22,7 @@ pub const log = std.log.scoped(.http2);
 pub const Http2Connection = struct {
     allocator: Allocator,
     reader: std.io.AnyReader,
-    writer: *std.io.BufferedWriter(4096, std.fs.File.Writer),
+    writer: std.io.AnyWriter,
     streams: StreamCollection,
     hpack_encoder: HPACK,
     hpack_decoder: HPACK,
@@ -38,7 +38,7 @@ pub const Http2Connection = struct {
     pub fn init(
         allocator: Allocator,
         reader: std.io.AnyReader,
-        writer: *std.io.BufferedWriter(4096, std.fs.File.Writer),
+        writer: std.io.AnyWriter,
     ) !Http2Connection {
         var conn = Http2Connection{
             .allocator = allocator,
@@ -56,7 +56,7 @@ pub const Http2Connection = struct {
         };
 
         // Send connection preface
-        try conn.writer.writer().writeAll(CONNECTION_PREFACE);
+        try conn.writer.writeAll(CONNECTION_PREFACE);
 
         // Send initial SETTINGS frame
         try conn.sendSettings();
@@ -82,7 +82,7 @@ pub const Http2Connection = struct {
         };
 
         try header.write(self.writer);
-        try self.writer.writer().writeAll(payload);
+        try self.writer.writeAll(payload);
     }
 
     fn sendSettingsAck(self: *Http2Connection) !void {
@@ -277,7 +277,7 @@ pub const Http2Connection = struct {
         };
 
         try ping_header.write(self.writer);
-        try self.writer.writer().writeAll(payload);
+        try self.writer.writeAll(payload);
     }
 
     fn processGoawayFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
@@ -362,7 +362,7 @@ pub const Http2Connection = struct {
         payload[3] = @intCast(@intFromEnum(error_code) & 0xFF);
 
         try header.write(self.writer);
-        try self.writer.writer().writeAll(&payload);
+        try self.writer.writeAll(&payload);
     }
 
     fn sendGoaway(self: *Http2Connection, error_code: ErrorCode) !void {
@@ -384,7 +384,7 @@ pub const Http2Connection = struct {
         payload[7] = @intCast(@intFromEnum(error_code) & 0xFF);
 
         try header.write(self.writer);
-        try self.writer.writer().writeAll(&payload);
+        try self.writer.writeAll(&payload);
         self.closed = true;
     }
 
@@ -403,7 +403,7 @@ pub const Http2Connection = struct {
         payload[3] = @intCast(increment & 0xFF);
 
         try header.write(self.writer);
-        try self.writer.writer().writeAll(&payload);
+        try self.writer.writeAll(&payload);
     }
 
     pub fn sendRequest(self: *Http2Connection, request: *Request) !*Stream {
@@ -496,7 +496,7 @@ pub const Http2Connection = struct {
         };
 
         try header.write(self.writer);
-        try self.writer.writer().writeAll(buf.items);
+        try self.writer.writeAll(buf.items);
 
         if (response.body) |body| {
             const data_header = FrameHeader{
@@ -507,7 +507,7 @@ pub const Http2Connection = struct {
             };
 
             try data_header.write(self.writer);
-            try self.writer.writer().writeAll(body);
+            try self.writer.writeAll(body);
         }
 
         stream.updateState(.half_closed_local);
@@ -538,7 +538,7 @@ pub const Http2Connection = struct {
         payload[7] = 0;
 
         try goaway_header.write(self.writer);
-        try self.writer.writer().writeAll(&payload);
+        try self.writer.writeAll(&payload);
 
         self.closed = true;
     }

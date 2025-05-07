@@ -732,7 +732,7 @@ fn handlePrefaceCompletion(_: *AsyncIo, task: *Task) !void {
     http2_conn.* = try Http2Connection.init(
         conn.allocator,
         reader.reader().any(),
-        &writer,
+        writer.writer().any(),
     );
     conn.http2_conn = http2_conn;
 

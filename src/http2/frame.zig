@@ -48,7 +48,7 @@ pub const FrameHeader = struct {
         buf[6] = @intCast((self.stream_id >> 16) & 0xFF);
         buf[7] = @intCast((self.stream_id >> 8) & 0xFF);
         buf[8] = @intCast(self.stream_id & 0xFF);
-        try writer.writer().writeAll(&buf); // Use writer.writer() to access the underlying Writer
+        try writer.writeAll(&buf);
     }
 };
 

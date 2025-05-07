@@ -851,7 +851,7 @@ fn handleHttp2FrameCompletion(_: *AsyncIo, task: *Task) !void {
             route_handler(req, res, task_data.ctx);
 
             // Send response
-            var headers_out = std.ArrayList(http2.HPACK.Header).init(conn.allocator);
+            var headers_out = std.ArrayList(http2.hpack.Header).init(conn.allocator);
             defer headers_out.deinit();
             const status_str = try std.fmt.allocPrint(conn.allocator, "{}", .{@intFromEnum(res.status)});
             defer conn.allocator.free(status_str);

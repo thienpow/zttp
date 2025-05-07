@@ -1,4 +1,3 @@
-// src/http2/hpack/mod.zig - HPACK header compression module entry point
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -85,6 +84,7 @@ pub const HPACK = struct {
                 if (err == error.EndOfStream) break;
                 return err;
             };
+
             if (first_byte & 0x80 == 0x80) {
                 // Indexed Header Field
                 const index = try readInteger(reader, first_byte, 7);
@@ -102,9 +102,32 @@ pub const HPACK = struct {
                 const value = try readString(reader, allocator);
                 try headers.append(.{ .name = name, .value = value });
                 try self.dynamic_table.add(name, value);
+            } else if (first_byte & 0x20 == 0x20) {
+                // Dynamic Table Size Update
+                const new_size = try readInteger(reader, first_byte, 5);
+                self.dynamic_table.updateMaxSize(new_size);
+            } else if (first_byte & 0x40 == 0x00) {
+                // Literal Header Field without Indexing
+                const name_index = try readInteger(reader, first_byte, 4);
+                var name: []const u8 = undefined;
+                if (name_index == 0) {
+                    name = try readString(reader, allocator);
+                } else {
+                    name = try self.getHeaderName(name_index, allocator);
+                }
+                const value = try readString(reader, allocator);
+                try headers.append(.{ .name = name, .value = value });
             } else {
-                // Other cases (e.g., without indexing, dynamic table size update)
-                return error.UnsupportedHPACKOperation;
+                // Literal Header Field with Never Indexing (sensitive data)
+                const name_index = try readInteger(reader, first_byte, 4);
+                var name: []const u8 = undefined;
+                if (name_index == 0) {
+                    name = try readString(reader, allocator);
+                } else {
+                    name = try self.getHeaderName(name_index, allocator);
+                }
+                const value = try readString(reader, allocator);
+                try headers.append(.{ .name = name, .value = value });
             }
         }
         return headers;

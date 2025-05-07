@@ -1,3 +1,4 @@
+// src/core/server.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -13,6 +14,8 @@ const HttpMethod = @import("../http/request.zig").HttpMethod;
 
 const websocket = @import("../websocket/mod.zig");
 const Connection = @import("connection.zig").Connection;
+
+const http2 = @import("../http2/mod.zig");
 
 const log = std.log.scoped(.server);
 
@@ -33,6 +36,7 @@ pub const Server = struct {
         max_connections: usize = 100, // Limit concurrent connections
         header_read_timeout_ms: u64 = 1000,
         websocket: websocket.WebSocket.Options = .{},
+        http2_settings: http2.Settings = .{},
     };
 
     pub fn init(allocator: Allocator, options: Options) !Server {

@@ -1,3 +1,4 @@
+// src/http/header_map.zig
 const std = @import("std");
 
 /// HeaderMap for storing multiple header values per key with case-insensitive keys.
@@ -88,5 +89,10 @@ pub const HeaderMap = struct {
         const lowercased = std.ascii.allocLowerString(self.allocator, name) catch return false;
         defer self.allocator.free(lowercased);
         return self.map.contains(lowercased);
+    }
+
+    /// Returns an iterator over the key-value pairs in the HeaderMap.
+    pub fn iterator(self: *const HeaderMap) std.StringHashMap(std.ArrayList([]const u8)).Iterator {
+        return self.map.iterator();
     }
 };

@@ -1,3 +1,4 @@
+// src/websocket/connection.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -492,18 +493,36 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) anyerror!void {
 /// Handles completion of async close tasks.
 fn handleCloseCompletion(_: *AsyncIo, task: *Task) anyerror!void {
     const conn: *WebSocketConnection = @ptrCast(@alignCast(task.userdata));
-    const result = task.result orelse return error.NoResult;
-
     const socket = conn.transport.fd;
+
+    // Log task details for debugging
+    log.debug("handleCloseCompletion: task={*}, operation={s}, fd={d}", .{
+        task, @tagName(task.req), socket,
+    });
+
+    // Check if the task is for a close operation
+    if (task.req != .close) {
+        log.err("Invalid task operation {s} in handleCloseCompletion (FD: {d})", .{
+            @tagName(task.req), socket,
+        });
+        task.userdata = null;
+        return error.InvalidTaskOperation;
+    }
+
+    const result = task.result orelse {
+        log.err("No result in task for FD {d}", .{socket});
+        task.userdata = null;
+        return error.NoResult;
+    };
+
+    // Process the close operation result
     _ = result.close catch |err| {
         log.err("Close error (FD: {d}): {any}", .{ socket, err });
     };
 
+    // Clean up
     conn.state = .closed;
-
     _ = conn.server.websocket_fds.remove(socket);
-
     conn.deinit();
-
     task.userdata = null;
 }

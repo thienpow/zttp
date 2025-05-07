@@ -1,3 +1,4 @@
+// src/http/request.zig
 const std = @import("std");
 const HeaderMap = @import("header_map.zig").HeaderMap;
 const cookie = @import("cookie.zig");
@@ -288,7 +289,7 @@ fn parseBody(allocator: std.mem.Allocator, data: []const u8, req: *Request) !voi
     }
 }
 
-fn parsePath(allocator: std.mem.Allocator, raw_path: []const u8) !struct { path: []const u8, query: std.StringHashMap([]const u8) } {
+pub fn parsePath(allocator: std.mem.Allocator, raw_path: []const u8) !struct { path: []const u8, query: std.StringHashMap([]const u8) } {
     var query = std.StringHashMap([]const u8).init(allocator);
     if (raw_path.len == 0 or raw_path[0] != '/') return RequestError.InvalidPath;
 
@@ -316,7 +317,7 @@ fn parsePath(allocator: std.mem.Allocator, raw_path: []const u8) !struct { path:
     return .{ .path = try allocator.dupe(u8, raw_path), .query = query };
 }
 
-fn parseMultipart(allocator: std.mem.Allocator, body: []const u8, boundary: []const u8) !std.ArrayList(Request.MultipartPart) {
+pub fn parseMultipart(allocator: std.mem.Allocator, body: []const u8, boundary: []const u8) !std.ArrayList(Request.MultipartPart) {
     var parts = std.ArrayList(Request.MultipartPart).init(allocator);
     const boundary_marker = try std.fmt.allocPrint(allocator, "--{s}", .{boundary});
     defer allocator.free(boundary_marker);
@@ -371,7 +372,7 @@ fn parseMultipart(allocator: std.mem.Allocator, body: []const u8, boundary: []co
     return parts;
 }
 
-fn parseMethod(method_str: []const u8) !HttpMethod {
+pub fn parseMethod(method_str: []const u8) !HttpMethod {
     if (std.mem.eql(u8, method_str, "GET")) return .get;
     if (std.mem.eql(u8, method_str, "POST")) return .post;
     if (std.mem.eql(u8, method_str, "PUT")) return .put;
@@ -383,7 +384,7 @@ fn parseMethod(method_str: []const u8) !HttpMethod {
     return RequestError.InvalidMethod;
 }
 
-fn decodeUri(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+pub fn decodeUri(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
     var decoded = std.ArrayList(u8).init(allocator);
     defer decoded.deinit();
 

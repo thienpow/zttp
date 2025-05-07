@@ -1,3 +1,4 @@
+// src/core/connection.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -16,6 +17,7 @@ const http = @import("../http/mod.zig");
 const Request = http.Request;
 const Response = http.Response;
 const StatusCode = http.StatusCode;
+const HeaderMap = http.HeaderMap;
 
 const websocket = @import("../websocket/mod.zig");
 const WebSocket = websocket.WebSocket;
@@ -27,6 +29,10 @@ const middleware = @import("../middleware/mod.zig");
 const MiddlewareContext = middleware.MiddlewareContext;
 const Template = @import("../template/main.zig");
 const utils = @import("../utils.zig");
+
+const http2 = @import("../http2/mod.zig");
+const Stream = http2.Stream;
+const HPACK = http2.HPACK;
 
 const log = std.log.scoped(.connection);
 
@@ -47,6 +53,14 @@ pub const Connection = struct {
     allocator: Allocator,
     state: State,
     task_data: *ConnectionTaskData,
+    protocol: Protocol = .http1, // Track protocol (HTTP/1.1 or HTTP/2)
+    hpack: ?HPACK = null, // HPACK context for HTTP/2
+    streams: std.AutoHashMap(u31, *Stream) = undefined, // HTTP/2 streams
+
+    pub const Protocol = enum {
+        http1,
+        http2,
+    };
 
     pub const State = enum {
         reading_request,
@@ -56,6 +70,8 @@ pub const Connection = struct {
         websocket_active,
         closing,
         closed,
+        reading_http2_preface,
+        processing_http2,
     };
 
     pub fn init(server: *Server, conn: std.net.Server.Connection, allocator: Allocator) !*Connection {
@@ -73,6 +89,9 @@ pub const Connection = struct {
             .allocator = allocator,
             .state = .reading_request,
             .task_data = task_data,
+            .protocol = .http1, // Default to HTTP/1.1
+            .hpack = null,
+            .streams = std.AutoHashMap(u31, *Stream).init(allocator),
         };
 
         try connection.startReading();
@@ -80,60 +99,109 @@ pub const Connection = struct {
     }
 
     pub fn deinit(self: *Connection) void {
+        // Clean up HTTP/2 streams
+        var stream_it = self.streams.iterator();
+        while (stream_it.next()) |entry| {
+            entry.value_ptr.*.deinit(self.allocator);
+        }
+        self.streams.deinit();
+
+        // Clean up HPACK
+        if (self.hpack) |*hpack| {
+            hpack.deinit();
+            self.hpack = null;
+        }
+
         self.task_data.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
     pub fn startReading(self: *Connection) !void {
-        try self.readNext();
+        if (self.state == .reading_http2_preface) {
+            try self.readPreface();
+        } else {
+            try self.readNext();
+        }
     }
 
-    fn readNext(self: *Connection) !void {
-        if (self.state != .reading_request) {
-            log.warn("readNext called in state: {}", .{self.state});
-            return;
-        }
-
-        // Clear buffer before reading new request
-        self.task_data.request_buffer.clearAndFree();
-        log.debug("Cleared request buffer for FD {d}, size: {d}", .{ self.fd, self.task_data.request_buffer.items.len });
-
-        // Cancel any existing header timer
-        if (self.task_data.header_timer_task) |timer_task| {
-            self.server.async_io.?.cancel(timer_task, .{ .ptr = self.task_data, .cb = handleTimerCancelCompletion }) catch |err| {
-                log.err("Failed to cancel header timer for FD {d}: {}", .{ self.fd, err });
-            };
-            self.task_data.header_timer_task = null;
-        }
-
+    fn readPreface(self: *Connection) !void {
         const task_data = self.task_data;
-        const buffer_size = 65536;
+        const buffer_size = 24; // Size of HTTP/2 client preface
         try task_data.request_buffer.ensureTotalCapacity(buffer_size);
-        task_data.request_buffer.items.len = 0; // Reset length
+        task_data.request_buffer.items.len = 0;
         const buf = task_data.request_buffer.allocatedSlice()[0..buffer_size];
 
-        // Schedule the read task
         const read_task = try self.server.async_io.?.getTask();
         read_task.* = .{
             .userdata = task_data,
-            .callback = handleReadCompletion,
+            .callback = handlePrefaceCompletion,
             .req = .{ .recv = .{ .fd = self.fd, .buffer = buf } },
         };
         self.server.async_io.?.submission_q.push(read_task);
+    }
 
-        // Schedule header timeout
-        const timeout_ms = self.server.options.header_read_timeout_ms;
-        const timeout_ms_i64 = @min(timeout_ms, std.math.maxInt(i64));
-        const timeout_ts = Timespec{
-            .sec = @divTrunc(timeout_ms_i64, 1000),
-            .nsec = @intCast((timeout_ms_i64 % 1000) * 1_000_000),
+    fn readNext(self: *Connection) !void {
+        if (self.state == .processing_http2) {
+            try self.readHttp2Frame();
+        } else if (self.state == .reading_request) {
+            // Existing HTTP/1.1 logic
+            if (self.state != .reading_request) {
+                log.warn("readNext called in state: {}", .{self.state});
+                return;
+            }
+            self.task_data.request_buffer.clearAndFree();
+            log.debug("Cleared request buffer for FD {d}, size: {d}", .{ self.fd, self.task_data.request_buffer.items.len });
+
+            if (self.task_data.header_timer_task) |timer_task| {
+                self.server.async_io.?.cancel(timer_task, .{ .ptr = self.task_data, .cb = handleTimerCancelCompletion }) catch |err| {
+                    log.err("Failed to cancel header timer for FD {d}: {}", .{ self.fd, err });
+                };
+                self.task_data.header_timer_task = null;
+            }
+
+            const task_data = self.task_data;
+            const buffer_size = 65536;
+            try task_data.request_buffer.ensureTotalCapacity(buffer_size);
+            task_data.request_buffer.items.len = 0;
+            const buf = task_data.request_buffer.allocatedSlice()[0..buffer_size];
+
+            const read_task = try self.server.async_io.?.getTask();
+            read_task.* = .{
+                .userdata = task_data,
+                .callback = handleReadCompletion,
+                .req = .{ .recv = .{ .fd = self.fd, .buffer = buf } },
+            };
+            self.server.async_io.?.submission_q.push(read_task);
+
+            const timeout_ms = self.server.options.header_read_timeout_ms;
+            const timeout_ms_i64 = @min(timeout_ms, std.math.maxInt(i64));
+            const timeout_ts = Timespec{
+                .sec = @divTrunc(timeout_ms_i64, 1000),
+                .nsec = @intCast((timeout_ms_i64 % 1000) * 1_000_000),
+            };
+            const timer_task = try self.server.async_io.?.timer(timeout_ts, .{
+                .ptr = task_data,
+                .cb = handleHeaderTimeoutCompletion,
+            });
+            task_data.header_timer_task = timer_task;
+            log.debug("Scheduled header timeout for FD {d} ({d}ms)", .{ self.fd, timeout_ms });
+        }
+    }
+
+    fn readHttp2Frame(self: *Connection) !void {
+        const task_data = self.task_data;
+        const buffer_size = 16384; // Max frame size (default)
+        try task_data.request_buffer.ensureTotalCapacity(buffer_size);
+        task_data.request_buffer.items.len = 0;
+        const buf = task_data.request_buffer.allocatedSlice()[0..buffer_size];
+
+        const read_task = try self.server.async_io.?.getTask();
+        read_task.* = .{
+            .userdata = task_data,
+            .callback = handleHttp2FrameCompletion,
+            .req = .{ .recv = .{ .fd = self.fd, .buffer = buf } },
         };
-        const timer_task = try self.server.async_io.?.timer(timeout_ts, .{
-            .ptr = task_data,
-            .cb = handleHeaderTimeoutCompletion,
-        });
-        task_data.header_timer_task = timer_task;
-        log.debug("Scheduled header timeout for FD {d} ({d}ms)", .{ self.fd, timeout_ms });
+        self.server.async_io.?.submission_q.push(read_task);
     }
 
     pub fn asyncClose(self: *Connection) !void {
@@ -603,4 +671,262 @@ fn handleClose(_: *AsyncIo, task: *Task) !void {
     conn.state = .closed;
     _ = conn.server.connections.remove(conn.fd);
     conn.deinit();
+}
+
+// http2
+
+fn handlePrefaceCompletion(_: *AsyncIo, task: *Task) !void {
+    const task_data: *ConnectionTaskData = @ptrCast(@alignCast(task.userdata));
+    const conn = task_data.conn;
+
+    const bytes_read = switch (task.result orelse return error.NoResult) {
+        .recv => |res| res catch |err| {
+            log.err("Preface read error on FD {d}: {}", .{ conn.fd, err });
+            conn.state = .closing;
+            try conn.asyncClose();
+            return;
+        },
+        else => return error.UnexpectedResult,
+    };
+
+    if (bytes_read < 24) {
+        log.debug("Incomplete preface on FD {d}, switching to HTTP/1.1", .{conn.fd});
+        conn.state = .reading_request;
+        conn.protocol = .http1;
+        try conn.readNext();
+        return;
+    }
+
+    const preface = task_data.request_buffer.items[0..24];
+    const expected_preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+    if (!std.mem.eql(u8, preface, expected_preface)) {
+        log.debug("Invalid preface on FD {d}, switching to HTTP/1.1", .{conn.fd});
+        conn.state = .reading_request;
+        conn.protocol = .http1;
+        try conn.readNext();
+        return;
+    }
+
+    log.info("HTTP/2 preface received on FD {d}", .{conn.fd});
+    conn.protocol = .http2;
+    conn.state = .processing_http2;
+    conn.hpack = HPACK.init(conn.allocator, 4096);
+    task_data.request_buffer.clearAndFree();
+
+    // Send SETTINGS frame
+    const settings = http2.Settings{};
+    const payload = try settings.writePayload(conn.allocator);
+    defer conn.allocator.free(payload);
+    const frame_header = http2.FrameHeader{
+        .length = @intCast(payload.len),
+        .type = .settings,
+        .flags = 0,
+        .stream_id = 0,
+    };
+    var buf = std.ArrayList(u8).init(conn.allocator);
+    defer buf.deinit();
+    try frame_header.write(buf.writer());
+    try buf.appendSlice(payload);
+    const write_task = try conn.server.async_io.?.getTask();
+    write_task.* = .{
+        .userdata = task_data,
+        .callback = handleWriteCompletion,
+        .req = .{ .write = .{ .fd = conn.fd, .buffer = try buf.toOwnedSlice() } },
+    };
+    task_data.write_task_id = @intFromPtr(write_task);
+    conn.server.async_io.?.submission_q.push(write_task);
+
+    try conn.readHttp2Frame();
+}
+
+fn handleHttp2FrameCompletion(_: *AsyncIo, task: *Task) !void {
+    const task_data: *ConnectionTaskData = @ptrCast(@alignCast(task.userdata));
+    const conn = task_data.conn;
+
+    const bytes_read = switch (task.result orelse return error.NoResult) {
+        .recv => |res| res catch |err| {
+            log.err("Frame read error on FD {d}: {}", .{ conn.fd, err });
+            conn.state = .closing;
+            try conn.asyncClose();
+            return;
+        },
+        else => return error.UnexpectedResult,
+    };
+
+    if (bytes_read == 0) {
+        log.debug("Connection closed by peer on FD {d}", .{conn.fd});
+        conn.state = .closing;
+        try conn.asyncClose();
+        return;
+    }
+
+    task_data.request_buffer.items.len = bytes_read;
+    var buffer_stream = std.io.fixedBufferStream(task_data.request_buffer.items);
+    const reader = buffer_stream.reader();
+
+    const header = try http2.FrameHeader.read(reader);
+    if (header.length > bytes_read - 9) {
+        log.err("Incomplete frame on FD {d}", .{conn.fd});
+        conn.state = .closing;
+        try conn.asyncClose();
+        return;
+    }
+
+    switch (header.type) {
+        .settings => {
+            const payload = task_data.request_buffer.items[9 .. 9 + header.length];
+            const settings = try http2.Settings.readPayload(conn.allocator, payload);
+            log.debug("Received SETTINGS on FD {d}: max_concurrent_streams={d}", .{ conn.fd, settings.max_concurrent_streams });
+            // Send SETTINGS ACK
+            const ack_header = http2.FrameHeader{
+                .length = 0,
+                .type = .settings,
+                .flags = 0x1, // ACK flag
+                .stream_id = 0,
+            };
+            var buf = std.ArrayList(u8).init(conn.allocator);
+            defer buf.deinit();
+            try ack_header.write(buf.writer());
+            const write_task = try conn.server.async_io.?.getTask();
+            write_task.* = .{
+                .userdata = task_data,
+                .callback = handleWriteCompletion,
+                .req = .{ .write = .{ .fd = conn.fd, .buffer = try buf.toOwnedSlice() } },
+            };
+            task_data.write_task_id = @intFromPtr(write_task);
+            conn.server.async_io.?.submission_q.push(write_task);
+        },
+        .headers => {
+            if (!conn.streams.contains(header.stream_id)) {
+                const stream = try http2.Stream.init(conn.allocator, header.stream_id);
+                stream.state = .open;
+                try conn.streams.put(header.stream_id, stream);
+            }
+            const stream = conn.streams.get(header.stream_id).?;
+            const payload = task_data.request_buffer.items[9 .. 9 + header.length];
+            var payload_stream = std.io.fixedBufferStream(payload);
+            const headers = try conn.hpack.?.decode(payload_stream.reader(), conn.allocator);
+            defer {
+                for (headers.items) |h| {
+                    conn.allocator.free(h.name);
+                    conn.allocator.free(h.value);
+                }
+                headers.deinit();
+            }
+
+            var req = try conn.allocator.create(Request);
+            req.* = Request{
+                .allocator = conn.allocator,
+                .method = .get, // Default, will parse from headers
+                .path = "",
+                .version = "HTTP/2.0",
+                .headers = HeaderMap.init(conn.allocator),
+                .query = std.StringHashMap([]const u8).init(conn.allocator),
+                .cookies = std.StringHashMap([]const u8).init(conn.allocator),
+                .body = null,
+                .json = null,
+                .json_arena = null,
+                .form = null,
+                .multipart = null,
+            };
+            for (headers.items) |h| {
+                if (std.mem.eql(u8, h.name, ":method")) {
+                    req.method = try http.parseMethod(h.value);
+                } else if (std.mem.eql(u8, h.name, ":path")) {
+                    const path_parts = try http.parsePath(conn.allocator, h.value);
+                    req.path = path_parts.path;
+                    req.query = path_parts.query;
+                } else {
+                    try req.headers.put(h.name, h.value);
+                }
+            }
+            stream.request = req;
+
+            // Process request
+            const res = try conn.allocator.create(Response);
+            res.* = Response.init(conn.allocator);
+            stream.response = res;
+
+            const route_handler = conn.server.router.getHandler(req.method, req.path, task_data.ctx) orelse utils.notFound;
+            route_handler(req, res, task_data.ctx);
+
+            // Send response
+            var headers_out = std.ArrayList(http2.HPACK.Header).init(conn.allocator);
+            defer headers_out.deinit();
+            const status_str = try std.fmt.allocPrint(conn.allocator, "{}", .{@intFromEnum(res.status)});
+            defer conn.allocator.free(status_str);
+            try headers_out.append(.{ .name = ":status", .value = status_str });
+            var header_it = res.headers.iterator();
+            while (header_it.next()) |entry| {
+                for (entry.value_ptr.items) |value| {
+                    try headers_out.append(.{ .name = entry.key_ptr.*, .value = value });
+                }
+            }
+            var buf = std.ArrayList(u8).init(conn.allocator);
+            defer buf.deinit();
+            try conn.hpack.?.encode(headers_out, buf.writer());
+            const frame_header = http2.FrameHeader{
+                .length = @intCast(buf.items.len),
+                .type = .headers,
+                .flags = 0x4, // END_HEADERS
+                .stream_id = header.stream_id,
+            };
+            var out_buf = std.ArrayList(u8).init(conn.allocator);
+            defer out_buf.deinit();
+            try frame_header.write(out_buf.writer());
+            try out_buf.appendSlice(buf.items);
+            if (res.body) |body| {
+                const data_frame = http2.FrameHeader{
+                    .length = @intCast(body.len),
+                    .type = .data,
+                    .flags = 0x1, // END_STREAM
+                    .stream_id = header.stream_id,
+                };
+                try data_frame.write(out_buf.writer());
+                try out_buf.appendSlice(body);
+            }
+            const write_task = try conn.server.async_io.?.getTask();
+            write_task.* = .{
+                .userdata = task_data,
+                .callback = handleWriteCompletion,
+                .req = .{ .write = .{ .fd = conn.fd, .buffer = try out_buf.toOwnedSlice() } },
+            };
+            task_data.write_task_id = @intFromPtr(write_task);
+            conn.server.async_io.?.submission_q.push(write_task);
+
+            // Clean up response and stream
+            stream.state = .half_closed_remote;
+            if (stream.response) |response| {
+                response.deinit();
+                conn.allocator.destroy(response);
+                stream.response = null;
+            }
+            if (stream.state == .half_closed_remote and (header.flags & 0x1) != 0) {
+                // Remove stream if fully closed
+                if (conn.streams.get(header.stream_id)) |stream_to_remove| {
+                    if (conn.streams.remove(header.stream_id)) {
+                        stream_to_remove.deinit(conn.allocator);
+                    }
+                }
+            }
+        },
+        .data => {
+            if (conn.streams.get(header.stream_id)) |stream| {
+                if (stream.request) |req| {
+                    const payload = task_data.request_buffer.items[9 .. 9 + header.length];
+                    req.body = try conn.allocator.dupe(u8, payload);
+                    // Re-process request if needed
+                }
+                if (header.flags & 0x1 != 0) { // END_STREAM
+                    stream.state = .half_closed_remote;
+                }
+            }
+        },
+        else => {
+            log.warn("Unsupported frame type {any} on FD {d}", .{ header.type, conn.fd });
+        },
+    }
+
+    task_data.request_buffer.clearAndFree();
+    try conn.readHttp2Frame();
 }

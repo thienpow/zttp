@@ -1,3 +1,4 @@
+// src/core/connection.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -96,7 +97,9 @@ pub const Connection = struct {
 
         // Clear buffer before reading new request
         self.task_data.request_buffer.clearAndFree();
-        log.debug("Cleared request buffer for FD {d}, size: {d}", .{ self.fd, self.task_data.request_buffer.items.len });
+        self.task_data.streaming_state = .none;
+
+        log.debug("Cleared request buffer and reset streaming state for FD {d}, size: {d}", .{ self.fd, self.task_data.request_buffer.items.len });
 
         // Cancel any existing header timer
         if (self.task_data.header_timer_task) |timer_task| {
@@ -169,6 +172,13 @@ const ConnectionTaskData = struct {
     middleware_ctx: ?*MiddlewareContext = null,
     header_timer_task: ?*Task = null,
     write_task_id: ?usize = null, // Track write task to prevent double processing
+    streaming_state: StreamingState = .none,
+
+    pub const StreamingState = enum {
+        none,
+        headers_parsed,
+        streaming_body,
+    };
 
     pub fn init(allocator: Allocator, conn: *Connection, app_context_ptr: *anyopaque) !*ConnectionTaskData {
         const ctx = try allocator.create(Context);
@@ -181,6 +191,7 @@ const ConnectionTaskData = struct {
             .conn = conn,
             .ctx = ctx,
             .request_buffer = std.ArrayList(u8).init(allocator),
+            .streaming_state = .none,
         };
         data.request_buffer.clearAndFree(); // Ensure empty
         log.debug("Initialized request buffer for FD {d}, size: {d}", .{ conn.fd, data.request_buffer.items.len });
@@ -280,43 +291,49 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) !void {
     log.debug("Read {d} bytes on FD {d}. Total buffer: {d}", .{ bytes_read, conn.fd, task_data.request_buffer.items.len });
     log.debug("Request data: {s}", .{task_data.request_buffer.items[0..@min(task_data.request_buffer.items.len, 1024)]});
 
-    _ = processRequest(task_data) catch |err| switch (err) {
-        error.RequestTooLarge => {
-            log.debug("Parse error on FD {d}: {}. Buffer content: {s}", .{ conn.fd, err, task_data.request_buffer.items[0..@min(task_data.request_buffer.items.len, 1024)] });
-            try sendErrorAsync(task_data, .payload_too_large, "Request entity too large");
-            task_data.request_buffer.clearAndFree(); // Clear buffer
-            conn.state = .closing;
-            try conn.asyncClose();
-            return;
-        },
-        error.InvalidRequestLine,
-        error.InvalidMethod,
-        error.InvalidPath,
-        error.InvalidHeader,
-        error.InvalidHeaderName,
-        error.InvalidVersion,
-        error.TooManyHeaders,
-        error.TooManyQueryParams,
-        error.IncompleteBody,
-        error.InvalidMultipart,
-        error.BodyTooLarge,
-        => {
-            log.debug("Parse error on FD {d}: {}", .{ conn.fd, err });
-            try sendErrorAsync(task_data, .bad_request, "Invalid request");
-            task_data.request_buffer.clearAndFree(); // Clear buffer
-            return;
-        },
-        else => {
-            log.err("Unexpected error on FD {d}: {}", .{ conn.fd, err });
-            task_data.request_buffer.clearAndFree(); // Clear buffer
-            conn.state = .closing;
-            try conn.asyncClose();
-            return;
-        },
-    };
+    switch (task_data.streaming_state) {
+        .none => {
+            // Try to parse headers
+            if (std.mem.indexOf(u8, task_data.request_buffer.items, "\r\n\r\n")) |body_start| {
+                task_data.streaming_state = .headers_parsed;
+                var req = try Request.parse(conn.allocator, task_data.request_buffer.items[0 .. body_start + 4]);
+                task_data.req = req;
 
-    if (conn.state == .reading_request) {
-        try conn.readNext();
+                if (req.streaming) {
+                    task_data.streaming_state = .streaming_body;
+                    // Process initial body chunk
+                    const body_data = task_data.request_buffer.items[body_start + 4 .. bytes_read];
+                    if (body_data.len > 0) if (req.body_stream_handler) |handler| {
+                        handler(&req, body_data);
+                    };
+                    try conn.readNext(); // Continue reading for more body chunks
+                } else {
+                    try processRequest(task_data);
+                }
+            } else {
+                try conn.readNext(); // Need more data to parse headers
+            }
+        },
+        .headers_parsed => {
+            // Should not reach here; headers already parsed
+            log.err("Invalid state .headers_parsed in handleReadCompletion for FD {d}", .{conn.fd});
+            conn.state = .closing;
+            try conn.asyncClose();
+            return;
+        },
+        .streaming_body => {
+            // Process body chunk
+            if (task_data.req) |*req| {
+                if (req.body_stream_handler) |handler| {
+                    handler(req, task_data.request_buffer.items[0..bytes_read]);
+                }
+                try conn.readNext(); // Continue reading
+            } else {
+                log.err("No request in streaming_body state for FD {d}", .{conn.fd});
+                conn.state = .closing;
+                try conn.asyncClose();
+            }
+        },
     }
 }
 
@@ -514,6 +531,7 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) !void {
         const is_keep_alive = req.isKeepAlive();
         req.deinit();
         task_data.req = null;
+        task_data.streaming_state = .none;
 
         if (is_keep_alive) {
             log.debug("Keep-alive on FD {d}", .{conn.fd});

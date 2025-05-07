@@ -1,3 +1,4 @@
+// src/http/request.zig
 const std = @import("std");
 const HeaderMap = @import("header_map.zig").HeaderMap;
 const cookie = @import("cookie.zig");
@@ -46,6 +47,9 @@ pub const Request = struct {
     json_arena: ?*std.heap.ArenaAllocator,
     form: ?std.StringHashMap([]const u8),
     multipart: ?std.ArrayList(MultipartPart),
+    streaming: bool,
+    body_buffer: std.ArrayList(u8),
+    body_stream_handler: ?*const fn (req: *Request, chunk: []const u8) void,
 
     pub const MultipartPart = struct {
         name: []const u8,
@@ -70,6 +74,9 @@ pub const Request = struct {
             .json_arena = null,
             .form = null,
             .multipart = null,
+            .streaming = false,
+            .body_buffer = std.ArrayList(u8).init(allocator),
+            .body_stream_handler = null,
         };
         errdefer req.deinit();
 
@@ -81,6 +88,10 @@ pub const Request = struct {
         try parseBody(allocator, data, &req);
 
         return req;
+    }
+
+    pub fn setStreamHandler(self: *Request, handler: *const fn (req: *Request, chunk: []const u8) void) void {
+        self.body_stream_handler = handler;
     }
 
     pub fn deinit(self: *Request) void {
@@ -137,6 +148,8 @@ pub const Request = struct {
             }
             multipart.deinit();
         }
+
+        self.body_buffer.deinit();
     }
 
     pub fn isKeepAlive(self: *const Request) bool {
@@ -230,59 +243,80 @@ fn parseHeaders(allocator: std.mem.Allocator, lines: *std.mem.SplitIterator(u8, 
 
 fn parseBody(allocator: std.mem.Allocator, data: []const u8, req: *Request) !void {
     const max_body_size = 1024 * 1024;
+    const stream_threshold = 1024 * 256; // 256 KB threshold for streaming
+
     if (std.mem.indexOf(u8, data, "\r\n\r\n")) |body_start| {
         if (body_start + 4 >= data.len) return;
         const body_data = data[body_start + 4 ..];
         if (body_data.len > max_body_size) return RequestError.BodyTooLarge;
 
         var body_len: ?usize = null;
-        if (req.headers.get("Content-Length")) |len_str| {
+        var is_chunked = false;
+        // Check for Content-Length or Transfer-Encoding
+        if (req.headers.get("Transfer-Encoding")) |te| {
+            if (std.ascii.eqlIgnoreCase(te, "chunked")) {
+                is_chunked = true;
+                req.streaming = true;
+            }
+        } else if (req.headers.get("Content-Length")) |len_str| {
             body_len = try std.fmt.parseInt(usize, len_str, 10);
+
+            if (body_len.? > stream_threshold) {
+                req.streaming = true;
+            }
             if (body_data.len < body_len.?) return RequestError.IncompleteBody;
         }
 
-        req.body = try allocator.dupe(u8, body_data[0..(body_len orelse body_data.len)]);
+        if (req.streaming) {
+            // For streaming, append to body_buffer instead of setting body
+            try req.body_buffer.appendSlice(body_data);
+            log.debug("Streaming enabled, appended {d} bytes to body_buffer", .{body_data.len});
+        } else {
+            // Non-streaming case: buffer entire body
+            if (body_data.len > max_body_size) return RequestError.BodyTooLarge;
+            req.body = try allocator.dupe(u8, body_data[0..(body_len orelse body_data.len)]);
 
-        if (req.body.?.len == 0) return;
-        if (req.headers.get("Content-Type")) |ct| {
-            switch (ContentType.fromString(ct)) {
-                .json => {
-                    var arena = try allocator.create(std.heap.ArenaAllocator);
-                    arena.* = std.heap.ArenaAllocator.init(allocator);
-                    errdefer {
-                        arena.deinit();
-                        allocator.destroy(arena);
-                    }
+            if (req.body.?.len == 0) return;
+            if (req.headers.get("Content-Type")) |ct| {
+                switch (ContentType.fromString(ct)) {
+                    .json => {
+                        var arena = try allocator.create(std.heap.ArenaAllocator);
+                        arena.* = std.heap.ArenaAllocator.init(allocator);
+                        errdefer {
+                            arena.deinit();
+                            allocator.destroy(arena);
+                        }
 
-                    const arena_allocator = arena.allocator();
-                    const parsed = try std.json.parseFromSlice(
-                        std.json.Value,
-                        arena_allocator,
-                        req.body.?,
-                        .{ .allocate = .alloc_always },
-                    );
-                    req.json = parsed.value;
-                    req.json_arena = arena;
-                },
-                .form_urlencoded => {
-                    var form = std.StringHashMap([]const u8).init(allocator);
-                    var pairs = std.mem.splitScalar(u8, req.body.?, '&');
-                    while (pairs.next()) |pair| {
-                        if (pair.len == 0) continue;
-                        const eq = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
-                        const key = try decodeUri(allocator, pair[0..eq]);
-                        const value = try decodeUri(allocator, pair[eq + 1 ..]);
-                        try form.put(key, value);
-                    }
-                    req.form = form;
-                },
-                .multipart_form_data => {
-                    if (std.mem.indexOf(u8, ct, "boundary=")) |b| {
-                        const boundary = ct[b + 9 ..];
-                        req.multipart = try parseMultipart(allocator, req.body.?, boundary);
-                    }
-                },
-                .other => {},
+                        const arena_allocator = arena.allocator();
+                        const parsed = try std.json.parseFromSlice(
+                            std.json.Value,
+                            arena_allocator,
+                            req.body.?,
+                            .{ .allocate = .alloc_always },
+                        );
+                        req.json = parsed.value;
+                        req.json_arena = arena;
+                    },
+                    .form_urlencoded => {
+                        var form = std.StringHashMap([]const u8).init(allocator);
+                        var pairs = std.mem.splitScalar(u8, req.body.?, '&');
+                        while (pairs.next()) |pair| {
+                            if (pair.len == 0) continue;
+                            const eq = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
+                            const key = try decodeUri(allocator, pair[0..eq]);
+                            const value = try decodeUri(allocator, pair[eq + 1 ..]);
+                            try form.put(key, value);
+                        }
+                        req.form = form;
+                    },
+                    .multipart_form_data => {
+                        if (std.mem.indexOf(u8, ct, "boundary=")) |b| {
+                            const boundary = ct[b + 9 ..];
+                            req.multipart = try parseMultipart(allocator, req.body.?, boundary);
+                        }
+                    },
+                    .other => {},
+                }
             }
         }
     }

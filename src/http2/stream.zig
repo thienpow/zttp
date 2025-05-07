@@ -1,4 +1,3 @@
-// src/http2/stream.zig - HTTP/2 stream states and management
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -13,7 +12,16 @@ pub const StreamState = enum {
     open,
     half_closed_local,
     half_closed_remote,
+    reserved_local,
+    reserved_remote,
     closed,
+};
+
+// Priority information for HTTP/2 streams
+pub const Priority = struct {
+    exclusive: bool,
+    dependency_stream_id: u31,
+    weight: u8,
 };
 
 // HTTP/2 Stream
@@ -23,6 +31,7 @@ pub const Stream = struct {
     request: ?*Request,
     response: ?*Response,
     window_size: i32,
+    priority: ?Priority,
 
     pub fn init(allocator: Allocator, id: u31) !*Stream {
         const stream = try allocator.create(Stream);
@@ -32,6 +41,7 @@ pub const Stream = struct {
             .request = null,
             .response = null,
             .window_size = 65535,
+            .priority = null,
         };
         return stream;
     }

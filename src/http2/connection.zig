@@ -1,4 +1,3 @@
-// src/http2/connection.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -32,6 +31,10 @@ pub const Http2Connection = struct {
     connection_error: ?ErrorCode,
     closed: bool,
     connection_window: u31,
+    pending_headers: ?struct {
+        stream_id: u31,
+        buffer: std.ArrayList(u8),
+    },
 
     const CONNECTION_PREFACE = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
 
@@ -52,13 +55,11 @@ pub const Http2Connection = struct {
             .last_stream_id = 0,
             .connection_error = null,
             .closed = false,
-            .connection_window = 65535, // Default initial window size (RFC 7540)
+            .connection_window = 65535,
+            .pending_headers = null,
         };
 
-        // Send connection preface
         try conn.writer.writeAll(CONNECTION_PREFACE);
-
-        // Send initial SETTINGS frame
         try conn.sendSettings();
 
         return conn;
@@ -68,6 +69,9 @@ pub const Http2Connection = struct {
         self.streams.deinit();
         self.hpack_encoder.deinit();
         self.hpack_decoder.deinit();
+        if (self.pending_headers) |*ph| {
+            ph.buffer.deinit();
+        }
     }
 
     fn sendSettings(self: *Http2Connection) !void {
@@ -107,11 +111,20 @@ pub const Http2Connection = struct {
                 return err;
             };
 
+            if (header.length > self.remote_settings.max_frame_size) {
+                try self.sendGoaway(.frame_size_error);
+                return;
+            }
+
             try self.processFrame(header);
         }
     }
 
     fn processFrame(self: *Http2Connection, header: FrameHeader) !void {
+        if (self.closed and header.type != .goaway) {
+            return;
+        }
+
         const payload = try self.allocator.alloc(u8, header.length);
         defer self.allocator.free(payload);
 
@@ -120,14 +133,14 @@ pub const Http2Connection = struct {
         switch (header.type) {
             .data => try self.processDataFrame(header, payload),
             .headers => try self.processHeadersFrame(header, payload),
+            .priority => try self.processPriorityFrame(header, payload),
+            .rst_stream => try self.processRstStreamFrame(header, payload),
             .settings => try self.processSettingsFrame(header, payload),
+            .push_promise => try self.processPushPromiseFrame(header, payload),
             .ping => try self.processPingFrame(header, payload),
             .goaway => try self.processGoawayFrame(header, payload),
             .window_update => try self.processWindowUpdateFrame(header, payload),
-            .rst_stream => try self.processRstStreamFrame(header, payload),
-            else => {
-                log.warn("Ignoring unsupported frame type {any} on stream {d}", .{ header.type, header.stream_id });
-            },
+            .continuation => try self.processContinuationFrame(header, payload),
         }
     }
 
@@ -142,15 +155,19 @@ pub const Http2Connection = struct {
             return;
         }
 
-        // Update flow control windows
         if (payload.len > self.connection_window or payload.len > stream.window_size) {
             try self.sendGoaway(.flow_control_error);
             return;
         }
+
+        if (payload.len > self.remote_settings.max_frame_size) {
+            try self.sendRstStream(header.stream_id, .frame_size_error);
+            return;
+        }
+
         self.connection_window -= @intCast(payload.len);
         stream.updateWindowSize(-@as(i32, @intCast(payload.len)));
 
-        // Append payload to request body
         if (stream.request) |req| {
             if (req.body) |existing_body| {
                 const new_body = try self.allocator.alloc(u8, existing_body.len + payload.len);
@@ -163,20 +180,23 @@ pub const Http2Connection = struct {
             }
         }
 
-        // Update stream state if END_STREAM
         if (header.flags & 0x1 != 0) {
             stream.updateState(.half_closed_remote);
         }
 
-        // Send WINDOW_UPDATE if needed
-        if (self.connection_window < 32768) {
-            const increment = 65535 - self.connection_window;
+        if (self.connection_window < self.remote_settings.initial_window_size / 2) {
+            const increment = @as(u31, @min(self.remote_settings.initial_window_size - self.connection_window, 0x7FFFFFFF));
             try self.sendWindowUpdate(0, increment);
             self.connection_window += increment;
         }
     }
 
     fn processHeadersFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
+        if (self.pending_headers != null) {
+            try self.sendGoaway(.protocol_error);
+            return;
+        }
+
         var stream: *Stream = undefined;
         if (self.streams.getStream(header.stream_id)) |existing_stream| {
             stream = existing_stream;
@@ -196,8 +216,43 @@ pub const Http2Connection = struct {
             return;
         }
 
-        // Decode headers
-        var payload_stream = std.io.fixedBufferStream(payload);
+        var header_buffer = std.ArrayList(u8).init(self.allocator);
+        try header_buffer.appendSlice(payload);
+
+        if (header.flags & 0x4 == 0) {
+            self.pending_headers = .{
+                .stream_id = header.stream_id,
+                .buffer = header_buffer,
+            };
+            return;
+        }
+
+        try self.processCompleteHeaders(stream, header, header_buffer);
+    }
+
+    fn processContinuationFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
+        if (self.pending_headers == null or self.pending_headers.?.stream_id != header.stream_id) {
+            try self.sendGoaway(.protocol_error);
+            return;
+        }
+
+        try self.pending_headers.?.buffer.appendSlice(payload);
+
+        if (header.flags & 0x4 != 0) {
+            const stream = self.streams.getStream(header.stream_id) orelse {
+                try self.sendRstStream(header.stream_id, .stream_closed);
+                return;
+            };
+            try self.processCompleteHeaders(stream, header, self.pending_headers.?.buffer);
+            self.pending_headers.?.buffer.deinit();
+            self.pending_headers = null;
+        }
+    }
+
+    fn processCompleteHeaders(self: *Http2Connection, stream: *Stream, header: FrameHeader, header_buffer: std.ArrayList(u8)) !void {
+        defer header_buffer.deinit();
+
+        var payload_stream = std.io.fixedBufferStream(header_buffer.items);
         const headers = try self.hpack_decoder.decode(payload_stream.reader(), self.allocator);
         defer {
             for (headers.items) |h| {
@@ -207,7 +262,6 @@ pub const Http2Connection = struct {
             headers.deinit();
         }
 
-        // Create Request object
         var req = try self.allocator.create(Request);
         req.* = Request{
             .allocator = self.allocator,
@@ -238,10 +292,74 @@ pub const Http2Connection = struct {
 
         stream.setRequest(req);
 
-        // Update stream state if END_STREAM
         if (header.flags & 0x1 != 0) {
             stream.updateState(.half_closed_remote);
         }
+    }
+
+    fn processPriorityFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
+        if (header.stream_id == 0 or payload.len != 5) {
+            try self.sendGoaway(.frame_size_error);
+            return;
+        }
+
+        const stream = self.streams.getStream(header.stream_id) orelse {
+            try self.sendRstStream(header.stream_id, .stream_closed);
+            return;
+        };
+
+        const exclusive = (payload[0] & 0x80) != 0;
+        const dep_stream_id = (@as(u31, payload[0] & 0x7F) << 24) |
+            (@as(u31, payload[1]) << 16) |
+            (@as(u31, payload[2]) << 8) |
+            @as(u31, payload[3]);
+        const weight = payload[4];
+
+        stream.priority = .{
+            .exclusive = exclusive,
+            .dependency_stream_id = dep_stream_id,
+            .weight = weight,
+        };
+    }
+
+    fn processPushPromiseFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
+        if (header.stream_id == 0 or payload.len < 4) {
+            try self.sendGoaway(.frame_size_error);
+            return;
+        }
+
+        if (!self.local_settings.enable_push) {
+            try self.sendGoaway(.protocol_error);
+            return;
+        }
+
+        const promised_stream_id = (@as(u31, payload[0] & 0x7F) << 24) |
+            (@as(u31, payload[1]) << 16) |
+            (@as(u31, payload[2]) << 8) |
+            @as(u31, payload[3]);
+
+        if (promised_stream_id % 2 != 0 or promised_stream_id <= self.last_stream_id) {
+            try self.sendGoaway(.protocol_error);
+            return;
+        }
+
+        var header_buffer = std.ArrayList(u8).init(self.allocator);
+        try header_buffer.appendSlice(payload[4..]);
+
+        if (header.flags & 0x4 == 0) {
+            self.pending_headers = .{
+                .stream_id = header.stream_id,
+                .buffer = header_buffer,
+            };
+            return;
+        }
+
+        const stream = try self.streams.createStream();
+        stream.id = promised_stream_id;
+        stream.updateState(.reserved_remote);
+        self.last_stream_id = promised_stream_id;
+
+        try self.processCompleteHeaders(stream, header, header_buffer);
     }
 
     fn processSettingsFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
@@ -260,8 +378,8 @@ pub const Http2Connection = struct {
     }
 
     fn processPingFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
-        if (header.stream_id != 0) {
-            try self.sendGoaway(.protocol_error);
+        if (header.stream_id != 0 or payload.len != 8) {
+            try self.sendGoaway(.frame_size_error);
             return;
         }
 
@@ -270,7 +388,7 @@ pub const Http2Connection = struct {
         }
 
         const ping_header = FrameHeader{
-            .length = @intCast(payload.len),
+            .length = 8,
             .type = .ping,
             .flags = frame.SettingsFlags.ACK,
             .stream_id = 0,
@@ -281,12 +399,7 @@ pub const Http2Connection = struct {
     }
 
     fn processGoawayFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
-        if (header.stream_id != 0) {
-            try self.sendGoaway(.protocol_error);
-            return;
-        }
-
-        if (payload.len < 8) {
+        if (header.stream_id != 0 or payload.len < 8) {
             try self.sendGoaway(.frame_size_error);
             return;
         }
@@ -295,7 +408,6 @@ pub const Http2Connection = struct {
             (@as(u31, payload[1]) << 16) |
             (@as(u31, payload[2]) << 8) |
             @as(u31, payload[3]);
-
         const error_code = (@as(u32, payload[4]) << 24) |
             (@as(u32, payload[5]) << 16) |
             (@as(u32, payload[6]) << 8) |
@@ -317,27 +429,30 @@ pub const Http2Connection = struct {
             (@as(u31, payload[2]) << 8) |
             @as(u31, payload[3]);
 
-        if (increment == 0) {
+        if (increment == 0 or increment > 0x7FFFFFFF) {
             try self.sendGoaway(.flow_control_error);
             return;
         }
 
         if (header.stream_id == 0) {
+            if (@as(u64, self.connection_window) + increment > 0x7FFFFFFF) {
+                try self.sendGoaway(.flow_control_error);
+                return;
+            }
             self.connection_window += increment;
         } else {
             if (self.streams.getStream(header.stream_id)) |stream| {
+                if (@as(i64, stream.window_size) + @as(i64, increment) > 0x7FFFFFFF) {
+                    try self.sendRstStream(header.stream_id, .flow_control_error);
+                    return;
+                }
                 stream.updateWindowSize(@intCast(increment));
             }
         }
     }
 
     fn processRstStreamFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
-        if (header.stream_id == 0) {
-            try self.sendGoaway(.protocol_error);
-            return;
-        }
-
-        if (payload.len != 4) {
+        if (header.stream_id == 0 or payload.len != 4) {
             try self.sendGoaway(.frame_size_error);
             return;
         }
@@ -411,7 +526,6 @@ pub const Http2Connection = struct {
         stream.setRequest(request);
         stream.updateState(.open);
 
-        // Serialize headers
         var headers = std.ArrayList(Header).init(self.allocator);
         defer headers.deinit();
 
@@ -432,10 +546,9 @@ pub const Http2Connection = struct {
         defer buf.deinit();
         try self.hpack_encoder.encode(headers, buf.writer());
 
-        // Send HEADERS frame
-        var flags: u8 = 0x4; // END_HEADERS
+        var flags: u8 = 0x4;
         if (request.body == null) {
-            flags |= 0x1; // END_STREAM
+            flags |= 0x1;
         }
 
         const header = FrameHeader{
@@ -448,12 +561,11 @@ pub const Http2Connection = struct {
         try header.write(self.writer);
         try self.writer.writeAll(buf.items);
 
-        // Send DATA frame if body exists
         if (request.body) |body| {
             const data_header = FrameHeader{
                 .length = @intCast(body.len),
                 .type = .data,
-                .flags = 0x1, // END_STREAM
+                .flags = 0x1,
                 .stream_id = stream.id,
             };
 
@@ -483,9 +595,9 @@ pub const Http2Connection = struct {
         defer buf.deinit();
         try self.hpack_encoder.encode(headers, buf.writer());
 
-        var flags: u8 = 0x4; // END_HEADERS
+        var flags: u8 = 0x4;
         if (response.body == null) {
-            flags |= 0x1; // END_STREAM
+            flags |= 0x1;
         }
 
         const header = FrameHeader{
@@ -502,7 +614,7 @@ pub const Http2Connection = struct {
             const data_header = FrameHeader{
                 .length = @intCast(body.len),
                 .type = .data,
-                .flags = 0x1, // END_STREAM
+                .flags = 0x1,
                 .stream_id = stream.id,
             };
 

@@ -1,4 +1,4 @@
-// src/http2/client.zig - HTTP/2 client implementation
+// src/http2/Http2Connection.zig - HTTP/2 Http2Connection implementation
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const net = std.net;
@@ -18,8 +18,8 @@ const Response = http.Response;
 const Http2Error = @import("error.zig").Http2Error;
 const ErrorCode = @import("error.zig").ErrorCode;
 
-// HTTP/2 client connection
-pub const Client = struct {
+// HTTP/2 Http2Connection connection
+pub const Http2Connection = struct {
     allocator: Allocator,
     reader: std.io.Reader,
     writer: std.io.Writer,
@@ -39,8 +39,8 @@ pub const Client = struct {
         allocator: Allocator,
         reader: std.io.Reader,
         writer: std.io.Writer,
-    ) !Client {
-        var client = Client{
+    ) !Http2Connection {
+        var conn = Http2Connection{
             .allocator = allocator,
             .reader = reader,
             .writer = writer,
@@ -55,22 +55,22 @@ pub const Client = struct {
         };
 
         // Send connection preface
-        try client.writer.writeAll(CONNECTION_PREFACE);
+        try conn.writer.writeAll(CONNECTION_PREFACE);
 
         // Send initial SETTINGS frame
-        try client.sendSettings();
+        try conn.sendSettings();
 
-        return client;
+        return conn;
     }
 
-    pub fn deinit(self: *Client) void {
+    pub fn deinit(self: *Http2Connection) void {
         self.streams.deinit();
         self.hpack_encoder.deinit();
         self.hpack_decoder.deinit();
     }
 
     // Send a SETTINGS frame
-    fn sendSettings(self: *Client) !void {
+    fn sendSettings(self: *Http2Connection) !void {
         const payload = try self.local_settings.writePayload(self.allocator);
         defer self.allocator.free(payload);
 
@@ -86,7 +86,7 @@ pub const Client = struct {
     }
 
     // Send a SETTINGS frame with ACK flag
-    fn sendSettingsAck(self: *Client) !void {
+    fn sendSettingsAck(self: *Http2Connection) !void {
         const header = FrameHeader{
             .length = 0,
             .type = .settings,
@@ -98,7 +98,7 @@ pub const Client = struct {
     }
 
     // Process incoming frames
-    pub fn processFrames(self: *Client) !void {
+    pub fn processFrames(self: *Http2Connection) !void {
         while (!self.closed) {
             const header = FrameHeader.read(self.reader) catch |err| {
                 if (err == error.EndOfStream) {
@@ -113,7 +113,7 @@ pub const Client = struct {
     }
 
     // Process a single frame
-    fn processFrame(self: *Client, header: FrameHeader) !void {
+    fn processFrame(self: *Http2Connection, header: FrameHeader) !void {
         const payload = try self.allocator.alloc(u8, header.length);
         defer self.allocator.free(payload);
 
@@ -132,7 +132,7 @@ pub const Client = struct {
     }
 
     // Process a DATA frame
-    fn processDataFrame(self: *Client, header: FrameHeader, payload: []const u8) !void {
+    fn processDataFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
         _ = payload;
         const stream = self.streams.getStream(header.stream_id) orelse return;
 
@@ -144,7 +144,7 @@ pub const Client = struct {
     }
 
     // Process a HEADERS frame
-    fn processHeadersFrame(self: *Client, header: FrameHeader, payload: []const u8) !void {
+    fn processHeadersFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
         _ = payload;
         const stream = self.streams.getStream(header.stream_id) orelse return;
         _ = stream;
@@ -152,7 +152,7 @@ pub const Client = struct {
     }
 
     // Process a SETTINGS frame
-    fn processSettingsFrame(self: *Client, header: FrameHeader, payload: []const u8) !void {
+    fn processSettingsFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
         if (header.stream_id != 0) {
             return error.InvalidStreamId;
         }
@@ -173,7 +173,7 @@ pub const Client = struct {
     }
 
     // Process a PING frame
-    fn processPingFrame(self: *Client, header: FrameHeader, payload: []const u8) !void {
+    fn processPingFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
         if (header.stream_id != 0) {
             return error.InvalidStreamId;
         }
@@ -196,7 +196,7 @@ pub const Client = struct {
     }
 
     // Process a GOAWAY frame
-    fn processGoawayFrame(self: *Client, header: FrameHeader, payload: []const u8) !void {
+    fn processGoawayFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
         if (header.stream_id != 0) {
             return error.InvalidStreamId;
         }
@@ -222,7 +222,7 @@ pub const Client = struct {
     }
 
     // Process a WINDOW_UPDATE frame
-    fn processWindowUpdateFrame(self: *Client, header: FrameHeader, payload: []const u8) !void {
+    fn processWindowUpdateFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
         if (payload.len != 4) {
             return error.InvalidFrameHeader;
         }
@@ -248,7 +248,7 @@ pub const Client = struct {
     }
 
     // Process a RST_STREAM frame
-    fn processRstStreamFrame(self: *Client, header: FrameHeader, payload: []const u8) !void {
+    fn processRstStreamFrame(self: *Http2Connection, header: FrameHeader, payload: []const u8) !void {
         if (header.stream_id == 0) {
             return error.InvalidStreamId;
         }
@@ -269,7 +269,7 @@ pub const Client = struct {
     }
 
     // Send a request
-    pub fn sendRequest(self: *Client, request: *Request) !*Stream {
+    pub fn sendRequest(self: *Http2Connection, request: *Request) !*Stream {
         const stream = try self.streams.createStream();
         stream.setRequest(request);
         stream.updateState(.open);
@@ -280,7 +280,7 @@ pub const Client = struct {
     }
 
     // Close the connection
-    pub fn close(self: *Client) !void {
+    pub fn close(self: *Http2Connection) !void {
         if (self.closed) return;
 
         // Send GOAWAY frame

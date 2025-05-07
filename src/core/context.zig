@@ -81,28 +81,4 @@ pub const Context = struct {
         }
         return null;
     }
-
-    pub fn setPtr(self: *Context, key: []const u8, value: *anyopaque) !void {
-        const key_owned = try self.allocator.dupe(u8, key);
-        errdefer self.allocator.free(key_owned);
-        const value_ptr: [*]const u8 = @ptrCast(value);
-        const value_slice = value_ptr[0..@sizeOf(*anyopaque)];
-        const value_owned = try self.allocator.dupe(u8, value_slice);
-        errdefer self.allocator.free(value_owned);
-        const gop = try self.data.getOrPut(key_owned);
-        if (gop.found_existing) {
-            self.allocator.free(gop.value_ptr.*);
-            self.allocator.free(gop.key_ptr.*);
-        }
-        gop.key_ptr.* = key_owned;
-        gop.value_ptr.* = value_owned;
-    }
-
-    pub fn getPtr(self: *Context, comptime T: type, key: []const u8) ?*T {
-        if (self.data.get(key)) |value| {
-            if (value.len != @sizeOf(*anyopaque)) return null;
-            return @ptrCast(value.ptr);
-        }
-        return null;
-    }
 };

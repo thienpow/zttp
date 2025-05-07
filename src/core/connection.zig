@@ -40,7 +40,6 @@ const ConnectionError = error{
     InvalidWebSocketKey,
     UnexpectedResult,
     NoAsyncIo,
-    InvalidChunk,
 };
 
 pub const Connection = struct {
@@ -99,9 +98,6 @@ pub const Connection = struct {
         // Clear buffer before reading new request
         self.task_data.request_buffer.clearAndFree();
         self.task_data.streaming_state = .none;
-        self.task_data.bytes_received = 0;
-        self.task_data.expected_length = null;
-        self.task_data.chunked_state = .none;
 
         log.debug("Cleared request buffer and reset streaming state for FD {d}, size: {d}", .{ self.fd, self.task_data.request_buffer.items.len });
 
@@ -177,21 +173,11 @@ const ConnectionTaskData = struct {
     header_timer_task: ?*Task = null,
     write_task_id: ?usize = null, // Track write task to prevent double processing
     streaming_state: StreamingState = .none,
-    bytes_received: usize = 0,
-    expected_length: ?usize = null,
-    chunked_state: ChunkedState = .none,
 
     pub const StreamingState = enum {
         none,
         headers_parsed,
         streaming_body,
-    };
-
-    pub const ChunkedState = enum {
-        none,
-        reading_size,
-        reading_data,
-        reading_trailer,
     };
 
     pub fn init(allocator: Allocator, conn: *Connection, app_context_ptr: *anyopaque) !*ConnectionTaskData {
@@ -206,9 +192,6 @@ const ConnectionTaskData = struct {
             .ctx = ctx,
             .request_buffer = std.ArrayList(u8).init(allocator),
             .streaming_state = .none,
-            .bytes_received = 0,
-            .expected_length = null,
-            .chunked_state = .none,
         };
         data.request_buffer.clearAndFree(); // Ensure empty
         log.debug("Initialized request buffer for FD {d}, size: {d}", .{ conn.fd, data.request_buffer.items.len });
@@ -277,60 +260,6 @@ fn sendErrorAsync(task_data: *ConnectionTaskData, status: StatusCode, message: [
     try sendResponseAsync(task_data);
 }
 
-fn parseChunkedData(req: *Request, data: []const u8, task_data: *ConnectionTaskData) ![]const u8 {
-    var chunk_data = std.ArrayList(u8).init(req.allocator);
-    defer chunk_data.deinit();
-    var pos: usize = 0;
-
-    while (pos < data.len) {
-        switch (task_data.chunked_state) {
-            .none, .reading_size => {
-                // Find the end of the chunk size line
-                const crlf = std.mem.indexOf(u8, data[pos..], "\r\n") orelse return error.InvalidChunk;
-                const size_line = data[pos .. pos + crlf];
-                pos += crlf + 2;
-
-                // Parse chunk size
-                const chunk_size = try std.fmt.parseInt(usize, size_line, 16);
-                if (chunk_size == 0) {
-                    task_data.chunked_state = .reading_trailer;
-                    continue;
-                }
-
-                task_data.chunked_state = .reading_data;
-                task_data.expected_length = chunk_size;
-
-                // Read chunk data
-                if (pos + chunk_size > data.len) return error.InvalidChunk;
-                try chunk_data.appendSlice(data[pos .. pos + chunk_size]);
-                pos += chunk_size;
-
-                // Expect CRLF after chunk data
-                if (pos + 2 > data.len or !std.mem.eql(u8, data[pos .. pos + 2], "\r\n")) {
-                    return error.InvalidChunk;
-                }
-                pos += 2;
-                task_data.chunked_state = .reading_size;
-            },
-            .reading_data => {
-                // Should not reach here; data should be consumed in reading_size
-                return error.InvalidChunk;
-            },
-            .reading_trailer => {
-                // Read trailer headers until empty line
-                if (pos + 2 <= data.len and std.mem.eql(u8, data[pos .. pos + 2], "\r\n")) {
-                    task_data.chunked_state = .none;
-                    break;
-                }
-                const crlf = std.mem.indexOf(u8, data[pos..], "\r\n") orelse return error.InvalidChunk;
-                pos += crlf + 2;
-            },
-        }
-    }
-
-    return try req.allocator.dupe(u8, chunk_data.items);
-}
-
 fn handleReadCompletion(_: *AsyncIo, task: *Task) !void {
     const task_data: *ConnectionTaskData = @ptrCast(@alignCast(task.userdata));
     const conn = task_data.conn;
@@ -359,9 +288,8 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) !void {
 
     // Adjust buffer length to reflect actual bytes read
     task_data.request_buffer.items.len = bytes_read;
-    task_data.bytes_received += bytes_read;
-
-    log.debug("Read {d} bytes on FD {d}. Total buffer: {d}, Total received: {d}", .{ bytes_read, conn.fd, task_data.request_buffer.items.len, task_data.bytes_received });
+    log.debug("Read {d} bytes on FD {d}. Total buffer: {d}", .{ bytes_read, conn.fd, task_data.request_buffer.items.len });
+    log.debug("Request data: {s}", .{task_data.request_buffer.items[0..@min(task_data.request_buffer.items.len, 1024)]});
 
     switch (task_data.streaming_state) {
         .none => {
@@ -371,31 +299,12 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) !void {
                 var req = try Request.parse(conn.allocator, task_data.request_buffer.items[0 .. body_start + 4]);
                 task_data.req = req;
 
-                // Set expected length for Content-Length
-                if (!req.streaming) if (req.headers.get("Content-Length")) |len_str| {
-                    task_data.expected_length = try std.fmt.parseInt(usize, len_str, 10);
-                };
-                if (req.streaming) if (req.headers.get("Transfer-Encoding")) |te| {
-                    if (std.ascii.eqlIgnoreCase(te, "chunked")) {
-                        task_data.chunked_state = .reading_size;
-                    }
-                };
-
                 if (req.streaming) {
                     task_data.streaming_state = .streaming_body;
                     // Process initial body chunk
                     const body_data = task_data.request_buffer.items[body_start + 4 .. bytes_read];
                     if (body_data.len > 0) if (req.body_stream_handler) |handler| {
-                        const chunk = if (task_data.chunked_state != .none)
-                            try parseChunkedData(&req, body_data, task_data)
-                        else
-                            body_data;
-                        handler(&req, chunk);
-                        if (task_data.chunked_state == .none) {
-                            // Streaming complete (e.g., chunked encoding finished)
-                            try processRequest(task_data);
-                            return;
-                        }
+                        handler(&req, body_data);
                     };
                     try conn.readNext(); // Continue reading for more body chunks
                 } else {
@@ -416,22 +325,7 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) !void {
             // Process body chunk
             if (task_data.req) |*req| {
                 if (req.body_stream_handler) |handler| {
-                    const chunk = if (task_data.chunked_state != .none)
-                        try parseChunkedData(req, task_data.request_buffer.items[0..bytes_read], task_data)
-                    else
-                        task_data.request_buffer.items[0..bytes_read];
-                    handler(req, chunk);
-                }
-                // Check for completion
-                if (task_data.chunked_state == .none) {
-                    // Chunked encoding finished
-                    try processRequest(task_data);
-                    return;
-                } else if (task_data.expected_length) |len| {
-                    if (task_data.bytes_received >= len) {
-                        try processRequest(task_data);
-                        return;
-                    }
+                    handler(req, task_data.request_buffer.items[0..bytes_read]);
                 }
                 try conn.readNext(); // Continue reading
             } else {
@@ -483,7 +377,8 @@ fn processRequest(task_data: *ConnectionTaskData) !void {
     const conn = task_data.conn;
     conn.state = .processing_request;
 
-    const req = &(task_data.req orelse return error.NoRequest);
+    const req_data = task_data.request_buffer.items;
+    var req = try Request.parse(conn.allocator, req_data);
     if (task_data.header_timer_task) |timer_task| {
         conn.server.async_io.?.cancel(timer_task, .{ .ptr = task_data, .cb = handleTimerCancelCompletion }) catch |err| {
             log.err("Failed to cancel header timer on FD {d}: {}", .{ conn.fd, err });
@@ -491,12 +386,7 @@ fn processRequest(task_data: *ConnectionTaskData) !void {
         task_data.header_timer_task = null;
     }
 
-    // If streaming, move body_buffer to req.body for further processing
-    if (req.streaming and req.body_buffer.items.len > 0) {
-        req.body = try conn.allocator.dupe(u8, req.body_buffer.items);
-        req.body_buffer.clearAndFree();
-    }
-
+    task_data.req = req;
     if (req.isWebSocketUpgrade()) {
         try handleWebSocketUpgrade(task_data);
     } else {
@@ -642,9 +532,6 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) !void {
         req.deinit();
         task_data.req = null;
         task_data.streaming_state = .none;
-        task_data.bytes_received = 0;
-        task_data.expected_length = null;
-        task_data.chunked_state = .none;
 
         if (is_keep_alive) {
             log.debug("Keep-alive on FD {d}", .{conn.fd});

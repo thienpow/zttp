@@ -1,4 +1,3 @@
-// showcase/src/main.zig
 const std = @import("std");
 const zttp = @import("zttp");
 const Server = zttp.Server;

@@ -31,8 +31,8 @@ const Template = @import("../template/main.zig");
 const utils = @import("../utils.zig");
 
 const http2 = @import("../http2/mod.zig");
+const Http2Connection = http2.Http2Connection;
 const Stream = http2.Stream;
-const HPACK = http2.HPACK;
 
 const log = std.log.scoped(.connection);
 
@@ -53,9 +53,8 @@ pub const Connection = struct {
     allocator: Allocator,
     state: State,
     task_data: *ConnectionTaskData,
-    protocol: Protocol = .http1, // Track protocol (HTTP/1.1 or HTTP/2)
-    hpack: ?HPACK = null, // HPACK context for HTTP/2
-    streams: std.AutoHashMap(u31, *Stream) = undefined, // HTTP/2 streams
+    protocol: Protocol = .http1,
+    http2_conn: ?*Http2Connection = null,
 
     pub const Protocol = enum {
         http1,
@@ -89,9 +88,8 @@ pub const Connection = struct {
             .allocator = allocator,
             .state = .reading_request,
             .task_data = task_data,
-            .protocol = .http1, // Default to HTTP/1.1
-            .hpack = null,
-            .streams = std.AutoHashMap(u31, *Stream).init(allocator),
+            .protocol = .http1,
+            .http2_conn = null,
         };
 
         try connection.startReading();
@@ -100,16 +98,10 @@ pub const Connection = struct {
 
     pub fn deinit(self: *Connection) void {
         // Clean up HTTP/2 streams
-        var stream_it = self.streams.iterator();
-        while (stream_it.next()) |entry| {
-            entry.value_ptr.*.deinit(self.allocator);
-        }
-        self.streams.deinit();
-
-        // Clean up HPACK
-        if (self.hpack) |*hpack| {
-            hpack.deinit();
-            self.hpack = null;
+        if (self.http2_conn) |http2_conn| {
+            http2_conn.deinit();
+            self.allocator.destroy(http2_conn);
+            self.http2_conn = null;
         }
 
         self.task_data.deinit(self.allocator);
@@ -119,25 +111,11 @@ pub const Connection = struct {
     pub fn startReading(self: *Connection) !void {
         if (self.state == .reading_http2_preface) {
             try self.readPreface();
+        } else if (self.state == .processing_http2) {
+            try self.readHttp2Frame();
         } else {
             try self.readNext();
         }
-    }
-
-    fn readPreface(self: *Connection) !void {
-        const task_data = self.task_data;
-        const buffer_size = 24; // Size of HTTP/2 client preface
-        try task_data.request_buffer.ensureTotalCapacity(buffer_size);
-        task_data.request_buffer.items.len = 0;
-        const buf = task_data.request_buffer.allocatedSlice()[0..buffer_size];
-
-        const read_task = try self.server.async_io.?.getTask();
-        read_task.* = .{
-            .userdata = task_data,
-            .callback = handlePrefaceCompletion,
-            .req = .{ .recv = .{ .fd = self.fd, .buffer = buf } },
-        };
-        self.server.async_io.?.submission_q.push(read_task);
     }
 
     fn readNext(self: *Connection) !void {
@@ -188,6 +166,22 @@ pub const Connection = struct {
         }
     }
 
+    fn readPreface(self: *Connection) !void {
+        const task_data = self.task_data;
+        const buffer_size = 24; // HTTP/2 client preface size
+        try task_data.request_buffer.ensureTotalCapacity(buffer_size);
+        task_data.request_buffer.items.len = 0;
+        const buf = task_data.request_buffer.allocatedSlice()[0..buffer_size];
+
+        const read_task = try self.server.async_io.?.getTask();
+        read_task.* = .{
+            .userdata = task_data,
+            .callback = handlePrefaceCompletion,
+            .req = .{ .recv = .{ .fd = self.fd, .buffer = buf } },
+        };
+        self.server.async_io.?.submission_q.push(read_task);
+    }
+
     fn readHttp2Frame(self: *Connection) !void {
         const task_data = self.task_data;
         const buffer_size = 16384; // Max frame size (default)
@@ -207,6 +201,12 @@ pub const Connection = struct {
     pub fn asyncClose(self: *Connection) !void {
         if (self.state == .closed or self.state == .closing) return;
         self.state = .closing;
+
+        if (self.protocol == .http2) {
+            if (self.http2_conn) |http2_conn| {
+                try http2_conn.close();
+            }
+        }
 
         // Cancel header timer
         if (self.task_data.header_timer_task) |timer_task| {
@@ -237,6 +237,7 @@ const ConnectionTaskData = struct {
     middleware_ctx: ?*MiddlewareContext = null,
     header_timer_task: ?*Task = null,
     write_task_id: ?usize = null, // Track write task to prevent double processing
+    http2_stream_responses: std.AutoHashMap(u31, *Response),
 
     pub fn init(allocator: Allocator, conn: *Connection, app_context_ptr: *anyopaque) !*ConnectionTaskData {
         const ctx = try allocator.create(Context);
@@ -249,6 +250,7 @@ const ConnectionTaskData = struct {
             .conn = conn,
             .ctx = ctx,
             .request_buffer = std.ArrayList(u8).init(allocator),
+            .http2_stream_responses = std.AutoHashMap(u31, *Response).init(allocator),
         };
         data.request_buffer.clearAndFree(); // Ensure empty
         log.debug("Initialized request buffer for FD {d}, size: {d}", .{ conn.fd, data.request_buffer.items.len });
@@ -279,6 +281,13 @@ const ConnectionTaskData = struct {
             allocator.destroy(mctx);
             self.middleware_ctx = null;
         }
+
+        var res_it = self.http2_stream_responses.iterator();
+        while (res_it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            allocator.destroy(entry.value_ptr.*);
+        }
+        self.http2_stream_responses.deinit();
 
         self.request_buffer.clearAndFree(); // Ensure buffer is cleared
         self.request_buffer.deinit();
@@ -710,32 +719,24 @@ fn handlePrefaceCompletion(_: *AsyncIo, task: *Task) !void {
     log.info("HTTP/2 preface received on FD {d}", .{conn.fd});
     conn.protocol = .http2;
     conn.state = .processing_http2;
-    conn.hpack = HPACK.init(conn.allocator, 4096);
+
+    // Initialize Http2Connection
+    const http2_conn = try conn.allocator.create(Http2Connection);
+    errdefer conn.allocator.destroy(http2_conn);
+
+    // Create a file reader for the socket file descriptor
+    const file = std.fs.File{ .handle = conn.fd };
+    var reader = std.io.bufferedReader(file.reader());
+    var writer = std.io.bufferedWriter(file.writer());
+
+    http2_conn.* = try Http2Connection.init(
+        conn.allocator,
+        reader.reader().any(),
+        &writer,
+    );
+    conn.http2_conn = http2_conn;
+
     task_data.request_buffer.clearAndFree();
-
-    // Send SETTINGS frame
-    const settings = http2.Settings{};
-    const payload = try settings.writePayload(conn.allocator);
-    defer conn.allocator.free(payload);
-    const frame_header = http2.FrameHeader{
-        .length = @intCast(payload.len),
-        .type = .settings,
-        .flags = 0,
-        .stream_id = 0,
-    };
-    var buf = std.ArrayList(u8).init(conn.allocator);
-    defer buf.deinit();
-    try frame_header.write(buf.writer());
-    try buf.appendSlice(payload);
-    const write_task = try conn.server.async_io.?.getTask();
-    write_task.* = .{
-        .userdata = task_data,
-        .callback = handleWriteCompletion,
-        .req = .{ .write = .{ .fd = conn.fd, .buffer = try buf.toOwnedSlice() } },
-    };
-    task_data.write_task_id = @intFromPtr(write_task);
-    conn.server.async_io.?.submission_q.push(write_task);
-
     try conn.readHttp2Frame();
 }
 
@@ -760,171 +761,39 @@ fn handleHttp2FrameCompletion(_: *AsyncIo, task: *Task) !void {
         return;
     }
 
-    task_data.request_buffer.items.len = bytes_read;
-    var buffer_stream = std.io.fixedBufferStream(task_data.request_buffer.items);
-    const reader = buffer_stream.reader();
+    // Feed data to Http2Connection
+    if (conn.http2_conn) |http2_conn| {
+        const buffer = task_data.request_buffer.items[0..bytes_read];
+        var buffer_stream = std.io.fixedBufferStream(buffer);
+        http2_conn.reader = buffer_stream.reader().any();
 
-    const header = try http2.FrameHeader.read(reader);
-    if (header.length > bytes_read - 9) {
-        log.err("Incomplete frame on FD {d}", .{conn.fd});
-        conn.state = .closing;
-        try conn.asyncClose();
-        return;
-    }
+        // Process frames
+        try http2_conn.processFrames();
 
-    switch (header.type) {
-        .settings => {
-            const payload = task_data.request_buffer.items[9 .. 9 + header.length];
-            const settings = try http2.Settings.readPayload(conn.allocator, payload);
-            log.debug("Received SETTINGS on FD {d}: max_concurrent_streams={d}", .{ conn.fd, settings.max_concurrent_streams });
-            // Send SETTINGS ACK
-            const ack_header = http2.FrameHeader{
-                .length = 0,
-                .type = .settings,
-                .flags = 0x1, // ACK flag
-                .stream_id = 0,
-            };
-            var buf = std.ArrayList(u8).init(conn.allocator);
-            defer buf.deinit();
-            try ack_header.write(buf.writer());
-            const write_task = try conn.server.async_io.?.getTask();
-            write_task.* = .{
-                .userdata = task_data,
-                .callback = handleWriteCompletion,
-                .req = .{ .write = .{ .fd = conn.fd, .buffer = try buf.toOwnedSlice() } },
-            };
-            task_data.write_task_id = @intFromPtr(write_task);
-            conn.server.async_io.?.submission_q.push(write_task);
-        },
-        .headers => {
-            if (!conn.streams.contains(header.stream_id)) {
-                const stream = try http2.Stream.init(conn.allocator, header.stream_id);
-                stream.state = .open;
-                try conn.streams.put(header.stream_id, stream);
-            }
-            const stream = conn.streams.get(header.stream_id).?;
-            const payload = task_data.request_buffer.items[9 .. 9 + header.length];
-            var payload_stream = std.io.fixedBufferStream(payload);
-            const headers = try conn.hpack.?.decode(payload_stream.reader(), conn.allocator);
-            defer {
-                for (headers.items) |h| {
-                    conn.allocator.free(h.name);
-                    conn.allocator.free(h.value);
-                }
-                headers.deinit();
-            }
-
-            var req = try conn.allocator.create(Request);
-            req.* = Request{
-                .allocator = conn.allocator,
-                .method = .get, // Default, will parse from headers
-                .path = "",
-                .version = "HTTP/2.0",
-                .headers = HeaderMap.init(conn.allocator),
-                .query = std.StringHashMap([]const u8).init(conn.allocator),
-                .cookies = std.StringHashMap([]const u8).init(conn.allocator),
-                .body = null,
-                .json = null,
-                .json_arena = null,
-                .form = null,
-                .multipart = null,
-            };
-            for (headers.items) |h| {
-                if (std.mem.eql(u8, h.name, ":method")) {
-                    req.method = try http.parseMethod(h.value);
-                } else if (std.mem.eql(u8, h.name, ":path")) {
-                    const path_parts = try http.parsePath(conn.allocator, h.value);
-                    req.path = path_parts.path;
-                    req.query = path_parts.query;
-                } else {
-                    try req.headers.put(h.name, h.value);
-                }
-            }
-            stream.request = req;
-
-            // Process request
-            const res = try conn.allocator.create(Response);
-            res.* = Response.init(conn.allocator);
-            stream.response = res;
-
-            const route_handler = conn.server.router.getHandler(req.method, req.path, task_data.ctx) orelse utils.notFound;
-            route_handler(req, res, task_data.ctx);
-
-            // Send response
-            var headers_out = std.ArrayList(http2.hpack.Header).init(conn.allocator);
-            defer headers_out.deinit();
-            const status_str = try std.fmt.allocPrint(conn.allocator, "{}", .{@intFromEnum(res.status)});
-            defer conn.allocator.free(status_str);
-            try headers_out.append(.{ .name = ":status", .value = status_str });
-            var header_it = res.headers.iterator();
-            while (header_it.next()) |entry| {
-                for (entry.value_ptr.items) |value| {
-                    try headers_out.append(.{ .name = entry.key_ptr.*, .value = value });
-                }
-            }
-            var buf = std.ArrayList(u8).init(conn.allocator);
-            defer buf.deinit();
-            try conn.hpack.?.encode(headers_out, buf.writer());
-            const frame_header = http2.FrameHeader{
-                .length = @intCast(buf.items.len),
-                .type = .headers,
-                .flags = 0x4, // END_HEADERS
-                .stream_id = header.stream_id,
-            };
-            var out_buf = std.ArrayList(u8).init(conn.allocator);
-            defer out_buf.deinit();
-            try frame_header.write(out_buf.writer());
-            try out_buf.appendSlice(buf.items);
-            if (res.body) |body| {
-                const data_frame = http2.FrameHeader{
-                    .length = @intCast(body.len),
-                    .type = .data,
-                    .flags = 0x1, // END_STREAM
-                    .stream_id = header.stream_id,
-                };
-                try data_frame.write(out_buf.writer());
-                try out_buf.appendSlice(body);
-            }
-            const write_task = try conn.server.async_io.?.getTask();
-            write_task.* = .{
-                .userdata = task_data,
-                .callback = handleWriteCompletion,
-                .req = .{ .write = .{ .fd = conn.fd, .buffer = try out_buf.toOwnedSlice() } },
-            };
-            task_data.write_task_id = @intFromPtr(write_task);
-            conn.server.async_io.?.submission_q.push(write_task);
-
-            // Clean up response and stream
-            stream.state = .half_closed_remote;
-            if (stream.response) |response| {
-                response.deinit();
-                conn.allocator.destroy(response);
-                stream.response = null;
-            }
-            if (stream.state == .half_closed_remote and (header.flags & 0x1) != 0) {
-                // Remove stream if fully closed
-                if (conn.streams.get(header.stream_id)) |stream_to_remove| {
-                    if (conn.streams.remove(header.stream_id)) {
-                        stream_to_remove.deinit(conn.allocator);
+        // Process completed streams
+        var stream_it = http2_conn.streams.streams.iterator();
+        while (stream_it.next()) |entry| {
+            const stream = entry.value_ptr.*;
+            if (stream.request) |req| {
+                if (stream.state == .half_closed_remote or stream.state == .closed) {
+                    if (task_data.http2_stream_responses.get(stream.id)) |existing_res| {
+                        _ = existing_res;
+                        // Skip if response already processed
+                        continue;
                     }
+
+                    const res = try conn.allocator.create(Response);
+                    errdefer conn.allocator.destroy(res);
+                    res.* = Response.init(conn.allocator);
+                    try task_data.http2_stream_responses.put(stream.id, res);
+
+                    const route_handler = conn.server.router.getHandler(req.method, req.path, task_data.ctx) orelse utils.notFound;
+                    route_handler(req, res, task_data.ctx);
+
+                    try http2_conn.sendResponse(stream, res);
                 }
             }
-        },
-        .data => {
-            if (conn.streams.get(header.stream_id)) |stream| {
-                if (stream.request) |req| {
-                    const payload = task_data.request_buffer.items[9 .. 9 + header.length];
-                    req.body = try conn.allocator.dupe(u8, payload);
-                    // Re-process request if needed
-                }
-                if (header.flags & 0x1 != 0) { // END_STREAM
-                    stream.state = .half_closed_remote;
-                }
-            }
-        },
-        else => {
-            log.warn("Unsupported frame type {any} on FD {d}", .{ header.type, conn.fd });
-        },
+        }
     }
 
     task_data.request_buffer.clearAndFree();

@@ -157,7 +157,7 @@ pub const Connection = struct {
                 .sec = @divTrunc(timeout_ms_i64, 1000),
                 .nsec = @intCast((timeout_ms_i64 % 1000) * 1_000_000),
             };
-            const timer_task = try self.server.async_io.?.timer(timeout_ts, .{
+            const timer_task = try self.server.async_io.?.setTimer(timeout_ts, .{
                 .ptr = task_data,
                 .cb = handleHeaderTimeoutCompletion,
             });

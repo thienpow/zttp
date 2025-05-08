@@ -12,7 +12,7 @@ const Server = core.Server;
 const WebSocketHandlerFn = @import("../core/router.zig").WebSocketHandlerFn;
 
 const AsyncIo = @import("../async/async.zig").AsyncIo;
-const AsyncContext = @import("../async/async.zig").Context;
+const AsyncContext = @import("../async/async.zig").AsyncContext;
 const Task = @import("../async/task.zig").Task;
 
 const log = std.log.scoped(.websocket_connection);

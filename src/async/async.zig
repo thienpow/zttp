@@ -41,7 +41,7 @@ pub const RecvError = @import("op_request.zig").RecvError;
 pub const Callback = *const fn (*AsyncIo, *Task) anyerror!void;
 pub fn noopCallback(_: *AsyncIo, _: *Task) anyerror!void {}
 
-pub const Context = struct {
+pub const AsyncContext = struct {
     ptr: ?*anyopaque = null,
     msg: u16 = 0,
     cb: Callback = noopCallback,
@@ -155,7 +155,7 @@ pub const AsyncIo = struct {
         return self.backend.pollableFd();
     }
 
-    pub fn noop(self: *AsyncIo, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
+    pub fn noop(self: *AsyncIo, ctx: AsyncContext) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -167,7 +167,7 @@ pub const AsyncIo = struct {
         return task;
     }
 
-    pub fn accept(self: *AsyncIo, fd: posix.fd_t, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
+    pub fn accept(self: *AsyncIo, fd: posix.fd_t, ctx: AsyncContext) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -179,7 +179,7 @@ pub const AsyncIo = struct {
         return task;
     }
 
-    pub fn recv(self: *AsyncIo, fd: posix.fd_t, buffer: []u8, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
+    pub fn recv(self: *AsyncIo, fd: posix.fd_t, buffer: []u8, ctx: AsyncContext) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -191,7 +191,7 @@ pub const AsyncIo = struct {
         return task;
     }
 
-    pub fn write(self: *AsyncIo, fd: posix.fd_t, buffer: []const u8, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
+    pub fn write(self: *AsyncIo, fd: posix.fd_t, buffer: []const u8, ctx: AsyncContext) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -203,7 +203,7 @@ pub const AsyncIo = struct {
         return task;
     }
 
-    pub fn writev(self: *AsyncIo, fd: posix.fd_t, vecs: []const posix.iovec_const, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
+    pub fn writev(self: *AsyncIo, fd: posix.fd_t, vecs: []const posix.iovec_const, ctx: AsyncContext) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -215,7 +215,7 @@ pub const AsyncIo = struct {
         return task;
     }
 
-    pub fn close(self: *AsyncIo, fd: posix.fd_t, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
+    pub fn close(self: *AsyncIo, fd: posix.fd_t, ctx: AsyncContext) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -227,7 +227,7 @@ pub const AsyncIo = struct {
         return task;
     }
 
-    pub fn timer(self: *AsyncIo, duration: Timespec, ctx: Context) error{ OutOfMemory, TaskReuseError }!*Task {
+    pub fn setTimer(self: *AsyncIo, duration: Timespec, ctx: AsyncContext) error{ OutOfMemory, TaskReuseError }!*Task {
         const task = try self.getTask();
         task.* = .{
             .userdata = ctx.ptr,
@@ -239,7 +239,7 @@ pub const AsyncIo = struct {
         return task;
     }
 
-    pub fn cancel(self: *AsyncIo, task: *Task, ctx: Context) error{ OutOfMemory, TaskReuseError }!void {
+    pub fn cancel(self: *AsyncIo, task: *Task, ctx: AsyncContext) error{ OutOfMemory, TaskReuseError }!void {
         const cancel_task = try self.getTask();
         cancel_task.* = .{
             .userdata = ctx.ptr,

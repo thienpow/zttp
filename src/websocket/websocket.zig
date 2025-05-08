@@ -1,7 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const WebSocketTransport = @import("transport.zig").WebSocketTransport;
-const AsyncContext = @import("../async/async.zig").Context;
+const AsyncContext = @import("../async/async.zig").AsyncContext;
 
 const log = std.log.scoped(.websocket);
 

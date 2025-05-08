@@ -3,7 +3,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const posix = std.posix;
 const AsyncIo = @import("../async/async.zig").AsyncIo;
-const AsyncContext = @import("../async/async.zig").Context;
+const AsyncContext = @import("../async/async.zig").AsyncContext;
 
 const log = std.log.scoped(.websocket_transport);
 

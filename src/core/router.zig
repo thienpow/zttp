@@ -9,7 +9,7 @@ const Response = http.Response;
 const HttpMethod = http.HttpMethod;
 
 const WebSocket = @import("../websocket/mod.zig").WebSocket;
-const AsyncContext = @import("../async/async.zig").Context;
+const AsyncContext = @import("../async/async.zig").AsyncContext;
 
 pub const HandlerFn = *const fn (*Request, *Response, *Context) void;
 pub const MiddlewareFn = *const fn (*Request, *Response, *Context, NextFn) void;

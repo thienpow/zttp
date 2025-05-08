@@ -5,7 +5,7 @@ Credits:
 *   Async I/O backend inspired by the `ourio` project ([https://github.com/rockorager/ourio](https://github.com/rockorager/ourio)) by Tim Culverhouse (@rockorager). Please see `LICENSE.md` for full license details.
 
 # TODO:
-*   Implement support for HTTP/2, or HTTP/3.
+*   Implement support for HTTP/3.(drafting...)
 
 *   Implement more sophisticated router matching (e.g., regex routes, route priorities).
 *   Add nested router capability.

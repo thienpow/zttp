@@ -19,7 +19,7 @@ const Router = router.Router;
 const WebSocketHandlerFn = router.WebSocketHandlerFn;
 
 const Async = @import("async/async.zig");
-pub const AsyncContext = Async.Context;
+pub const AsyncContext = Async.AsyncContext;
 
 const websocket = @import("websocket/mod.zig");
 pub const WebSocket = websocket.WebSocket;

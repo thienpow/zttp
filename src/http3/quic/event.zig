@@ -1,4 +1,4 @@
-// src/quic/event.zig
+// src/http3/quic/event.zig
 // QUIC event definitions
 
 const std = @import("std");

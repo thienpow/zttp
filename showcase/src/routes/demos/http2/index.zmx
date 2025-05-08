@@ -1,0 +1,17 @@
+#extends "layout"
+
+#block content
+    <title>ZTTP Showcase - HTTP/2 Demo</title>
+    <h1>HTTP/2 Demo</h1>
+    <p>This page demonstrates ZTTP's ability to handle HTTP/2 connections.</p>
+    <p>When you visit this page, your browser and the server will negotiate the protocol. The server handler for this page receives the request and reports the protocol version used.</p>
+    <hr>
+
+    <h2>Request Details</h2>
+    <p>This request was received using the protocol version: <strong>{{ request_protocol // "Unknown" }}</strong></p>
+
+    <p><strong>Note:</strong> Your browser may automatically upgrade the connection to HTTP/2 if the server supports it and you are not accessing over plain HTTP without an upgrade mechanism. Most modern browsers use HTTP/2 over HTTPS by default.</p>
+    <p>Check your browser's developer tools (Network tab) to confirm the protocol used for this request.</p>
+
+    <hr>
+#endblock

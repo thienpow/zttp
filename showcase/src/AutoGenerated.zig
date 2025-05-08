@@ -47,6 +47,12 @@ pub fn getRoutes(allocator: std.mem.Allocator) ![]const Route {
     try routes.append(Route{
         .module_name = try allocator.dupe(u8, "index"),
         .method = .get,
+        .path = try allocator.dupe(u8, "/demos/http2"),
+        .handler = @import("routes/demos/http2/index.zig").get,
+    });
+    try routes.append(Route{
+        .module_name = try allocator.dupe(u8, "index"),
+        .method = .get,
         .path = try allocator.dupe(u8, "/demos/conditionals"),
         .handler = @import("routes/demos/conditionals/index.zig").get,
     });
@@ -122,6 +128,10 @@ pub fn getTemplates(allocator: std.mem.Allocator) ![]const Template {
     try templates.append(Template{
         .name = try allocator.dupe(u8, "demos/websocket/chat/index"),
         .buffer = @embedFile("routes/demos/websocket/chat/index.zmx"),
+    });
+    try templates.append(Template{
+        .name = try allocator.dupe(u8, "demos/http2/index"),
+        .buffer = @embedFile("routes/demos/http2/index.zmx"),
     });
     try templates.append(Template{
         .name = try allocator.dupe(u8, "demos/login"),

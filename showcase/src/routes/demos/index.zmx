@@ -135,6 +135,17 @@
             </div>
         </div>
 
+        <!-- Demo Item 7: HTTP/2 Demo -->
+        <div class="accordion">
+            <div class="accordion-header">HTTP/2 Demo</div>
+            <div class="accordion-content">
+                <h3><a href="/demos/http2" hx-target="main" hx-boost="true">HTTP/2 Demo</a></h3>
+                <p>See which HTTP protocol version your browser uses to request this page from the ZTTP server.</p>
+                    <p>Location: <code>/demos/http2</code></p>
+                    <button hx-get="/demos/http2" hx-target="main" hx-boost="true" class="btn visit-button" data-variant="outline" data-size="sm">Visit Demo</button>
+            </div>
+        </div>
+
     </div>
 
 #endblock

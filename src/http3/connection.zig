@@ -173,18 +173,18 @@ pub const QuicConnection = struct {
     /// Timer callback function used by AsyncIo
     fn onTimer(async_io: *AsyncIo, task: *Task) anyerror!void {
         _ = async_io;
-        const self = @as(*QuicConnection, @ptrCast(@alignCast(task.userdata.?)));
-        self.timer_task = null;
+        const conn = @as(*QuicConnection, @ptrCast(task.userdata.?));
+        conn.timer_task = null;
 
         // Process any timeouts in the QUIC connection
-        if (self.quic_conn) |conn| {
-            try quic.processTimeouts(conn);
+        if (conn.quic_conn) |quic_conn| {
+            try quic.processTimeouts(quic_conn);
 
             // Handle any events, schedule packets, etc.
-            try self.flushOutgoingPackets();
+            try conn.flushOutgoingPackets();
 
             // Schedule the next timer
-            try self.scheduleTimer();
+            try conn.scheduleTimer();
         }
     }
 
@@ -255,7 +255,7 @@ pub const QuicConnection = struct {
     /// Callback for packet sending completion
     fn onPacketSent(async_io: *AsyncIo, task: *Task) anyerror!void {
         _ = async_io;
-        const self = @as(*QuicConnection, @ptrCast(@alignCast(task.userdata.?)));
+        const conn = @as(*QuicConnection, @ptrCast(task.userdata.?));
 
         if (task.result) |res| {
             const bytes_sent = res.write catch |err| {
@@ -263,52 +263,52 @@ pub const QuicConnection = struct {
                 return err;
             };
 
-            log.debug("Sent {} bytes to {}", .{ bytes_sent, self.remote_address });
+            log.debug("Sent {} bytes to {}", .{ bytes_sent, conn.remote_address });
         }
     }
 
     /// Called by the QUIC library via callback when events occur on the connection
-    fn quicEventCallback(conn: *quic.Connection, event: quic.Event, user_ctx: ?*anyopaque) void {
-        const self = @ptrCast(*QuicConnection, @alignCast(@alignOf(*QuicConnection), user_ctx.?));
+    fn quicEventCallback(_: *quic.Connection, event: quic.Event, user_ctx: ?*anyopaque) void {
+        const http_conn = @as(*QuicConnection, @ptrCast(user_ctx.?));
 
         switch (event) {
             .handshake_completed => {
-                self.onHandshakeCompleted() catch |err| {
+                http_conn.onHandshakeCompleted() catch |err| {
                     log.err("Error handling handshake completion: {}", .{err});
-                    self.asyncClose(ErrorCode.internal_error) catch {};
+                    http_conn.asyncClose(ErrorCode.internal_error) catch {};
                 };
             },
             .new_stream => |stream_info| {
-                self.handleNewStream(stream_info.stream_id, stream_info.is_unidirectional) catch |err| {
+                http_conn.handleNewStream(stream_info.stream_id, stream_info.is_unidirectional) catch |err| {
                     log.err("Error handling new stream: {}", .{err});
-                    self.asyncClose(ErrorCode.stream_creation_error) catch {};
+                    http_conn.asyncClose(ErrorCode.stream_creation_error) catch {};
                 };
             },
             .stream_data => |stream_data| {
-                if (self.streams.get(stream_data.stream_id)) |stream| {
+                if (http_conn.streams.get(stream_data.stream_id)) |stream| {
                     stream.handleReadData(stream_data.data, stream_data.is_fin) catch |err| {
                         log.err("Error handling stream data: {}", .{err});
-                        self.asyncClose(ErrorCode.internal_error) catch {};
+                        http_conn.asyncClose(ErrorCode.internal_error) catch {};
                     };
                 } else {
                     log.err("Received data for unknown stream {}", .{stream_data.stream_id});
-                    self.asyncClose(ErrorCode.protocol_error) catch {};
+                    http_conn.asyncClose(ErrorCode.protocol_error) catch {};
                 }
             },
             .stream_closed => |stream_close| {
-                self.handleStreamClose(stream_close.stream_id, stream_close.error_code) catch |err| {
+                http_conn.handleStreamClose(stream_close.stream_id, stream_close.error_code) catch |err| {
                     log.err("Error handling stream close: {}", .{err});
                 };
             },
             .connection_state_change => |state| {
-                self.handleConnectionStateChange(state) catch |err| {
+                http_conn.handleConnectionStateChange(state) catch |err| {
                     log.err("Error handling connection state change: {}", .{err});
                 };
             },
             .connection_closed => |close_info| {
                 log.info("QUIC connection closed: code={d}, reason={s}", .{ close_info.error_code, close_info.reason });
-                self.state = .closed;
-                self.server.handleHttp3ConnectionClosed(self);
+                http_conn.state = .closed;
+                http_conn.server.handleHttp3ConnectionClosed(http_conn);
             },
             // Handle other event types as needed
             else => {
@@ -480,10 +480,11 @@ pub const QuicConnection = struct {
         }
 
         self.state = .closing;
-        log.info("Initiating HTTP/3 connection closure with error code {}", .{@enumToInt(error_code)});
+        const code_value = @intFromEnum(error_code);
+        log.info("Initiating HTTP/3 connection closure with error code {}", .{code_value});
 
         if (self.quic_conn) |conn| {
-            try quic.closeConnection(conn, @enumToInt(error_code), "HTTP/3 error");
+            try quic.closeConnection(conn, code_value, "HTTP/3 error");
 
             // Make sure any generated packets are sent immediately
             try self.flushOutgoingPackets();

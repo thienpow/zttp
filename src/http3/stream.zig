@@ -232,102 +232,73 @@ pub const QuicStream = struct {
     /// Processes a fully parsed HTTP/3 frame received on this stream.
     /// This is where the HTTP/3 protocol logic per stream would go.
     fn handleFrame(self: *QuicStream, frame: Frame) anyerror!void {
-        // TODO: @unionToTag is invalid builtin function, please look for a valid alternative
-        // log.debug("Stream {d}: handleFrame({}) in parser state {}, stream type {}", .{ self.stream_id, @tagName(@unionToTag(frame)), @tagName(self.parser_state), self.stream_type });
+        log.debug("Stream {d}: handleFrame({s}) in parser state {}, stream type {}", .{ self.stream_id, @tagName(frame), @tagName(self.parser_state), self.stream_type });
 
         // Logic depends on stream type and current parser state
         switch (self.stream_type) {
             .control => {
                 // Handle frames specific to the control stream
-                switch (@unionToTag(frame)) {
+                switch (frame) {
                     .settings => {
                         log.debug("Stream {d} (Control): Processing SETTINGS frame", .{self.stream_id});
-                        // TODO: Parse and apply settings to the connection or server.
-                        // Use settings.parse(self.allocator, frame.settings.payload)
-                        // try self.connection.applySettings(&frame.settings);
+                        // TODO: Parse and apply settings to the connection or server
                         return http3_error.Unimplemented; // Placeholder
                     },
                     .goaway => {
                         log.info("Stream {d} (Control): Received GOAWAY frame, stream ID {}", .{ self.stream_id, frame.goaway.stream_id });
-                        // TODO: Handle GOAWAY frame - initiate connection shutdown.
-                        // The connection should be notified to stop accepting new streams and close gracefully.
-                        // try self.connection.asyncClose(.goaway); // Example, need to use the stream_id in the GOAWAY frame
+                        // TODO: Handle GOAWAY frame
                         return http3_error.Unimplemented; // Placeholder
                     },
                     .max_push_id => {
                         log.debug("Stream {d} (Control): Received MAX_PUSH_ID frame with push ID {}", .{ self.stream_id, frame.max_push_id.push_id });
-                        // Update the maximum Push ID the client is willing to accept.
-                        // This is relevant for server push implementation.
+                        // TODO: Update max Push ID
                         return http3_error.Unimplemented; // Placeholder
                     },
-                    // TODO: Handle other control frames (e.g., H3_DATAGRAM)
-
-                    // Reserved or unexpected frames on control stream are protocol errors
-                    inline else => {
-                        log.err("Stream {d}: Received unexpected frame type {} on control stream", .{ self.stream_id, @tagName(@unionToTag(frame)) });
+                    else => {
+                        log.err("Stream {d}: Received unexpected frame type {s} on control stream", .{ self.stream_id, @tagName(frame) });
                         try self.connection.asyncClose(.frame_unexpected);
                         return Http3Error.FrameUnexpected;
                     },
                 }
             },
             .push => {
-                // Handle frames on a server push stream (unidirectional from server to client)
-                // The server initiates this stream. It carries a PUSH_PROMISE frame first (client receives),
-                // followed by HEADERS and DATA frames for the pushed resource (client receives).
                 log.warn("Push stream handling unimplemented for stream {}", .{self.stream_id});
-                // TODO: Implement server push logic if needed.
-                try self.connection.asyncClose(.unimplemented); // Close stream if push is not supported
+                try self.connection.asyncClose(.unimplemented);
                 return http3_error.Unimplemented; // Placeholder
             },
             .encoder => {
-                // Handle frames on the QPACK encoder stream (unidirectional)
-                // This stream carries QPACK encoder instructions (client to server).
                 log.debug("Stream {d}: Handling QPACK encoder stream data", .{self.stream_id});
-                // Pass the raw payload data to the connection's QPACK decoder.
-                if (self.connection.qpack_decoder) |decoder| {
-                    try decoder.handleDecoderStreamData(frame.data.payload); // Assuming DATA frame on encoder stream
+                if (self.connection.qpack_encoder) |encoder| {
+                    try encoder.handleDecoderStream(frame.data.payload);
                 } else {
-                    log.err("Stream {d}: Received encoder stream data but no QPACK decoder!", .{self.stream_id});
+                    log.err("Stream {d}: Received encoder stream data but no QPACK encoder!", .{self.stream_id});
                     try self.connection.asyncClose(.protocol_error);
                     return Http3Error.ProtocolError;
                 }
-                return; // Handled by QPACK decoder
+                return;
             },
             .decoder => {
-                // Handle frames on the QPACK decoder stream (unidirectional)
-                // This stream carries QPACK decoder instructions (server to client).
                 log.debug("Stream {d}: Handling QPACK decoder stream data", .{self.stream_id});
-                // Pass the raw payload data to the connection's QPACK encoder.
-                if (self.connection.qpack_encoder) |encoder| {
-                    try encoder.handleDecoderStream(frame.data.payload); // Assuming DATA frame on decoder stream
+                if (self.connection.qpack_decoder) |decoder| {
+                    try decoder.handleDecoderStreamData(frame.data.payload);
                 } else {
-                    log.err("Stream {d}: Received decoder stream data but no QPACK encoder!", .{self.stream_id});
+                    log.err("Stream {d}: Received decoder stream data but no QPACK decoder!", .{self.stream_id});
                     try self.connection.asyncClose(.protocol_error);
                     return Http3Error.ProtocolError;
                 }
-                return; // Handled by QPACK encoder
+                return;
             },
-            null => { // Standard bidirectional stream (likely request/response)
+            null => {
                 switch (self.parser_state) {
                     .waiting_for_headers => {
-                        // Expecting the initial HEADERS frame for a request
-                        switch (@unionToTag(frame)) {
+                        switch (frame) {
                             .headers => {
                                 log.debug("Stream {d}: Processing initial HEADERS frame", .{self.stream_id});
-                                // TODO: Decode headers using QPACK (from self.connection.qpack_decoder)
-                                // Create a Request struct from headers (including method, path, authority).
                                 if (self.connection.qpack_decoder) |decoder| {
-                                    var headers = try decoder.decodeHeaders(frame.headers.encoded_block);
-                                    // TODO: Use headers to create the Request object
-                                    // self.request = try Request.init(self.allocator, headers, ...);
-                                    // headers.deinit(); // Deinit the HeaderMap once used by Request
-
-                                    // Determine if a request body is expected based on method/headers
-                                    // if request_has_body:
-                                    //     self.parser_state = .reading_body; // Next expect DATA frames
-                                    // else:
-                                    //     self.parser_state = .request_complete; // Request complete, no body
-                                    self.parser_state = .request_complete; // Simplified for now
+                                    const headers = try decoder.decodeHeaders(frame.headers.encoded_block);
+                                    _ = headers;
+                                    // TODO: Create Request object
+                                    self.parser_state = .request_complete; // Simplified
                                     log.info("Stream {d}: Request HEADERS received, ready to process (simplified)", .{self.stream_id});
                                 } else {
                                     log.err("Stream {d}: Received HEADERS frame but no QPACK decoder!", .{self.stream_id});
@@ -335,105 +306,77 @@ pub const QuicStream = struct {
                                     return Http3Error.ProtocolError;
                                 }
                                 return http3_error.Unimplemented; // Placeholder
-
                             },
                             .settings, .goaway, .max_push_id, .cancel_push, .duplicate_push => {
-                                // These frames are not expected before the initial HEADERS on a request stream.
-                                log.err("Stream {d}: Received unexpected frame type {} before HEADERS frame", .{ self.stream_id, @tagName(@unionToTag(frame)) });
-                                try self.connection.asyncClose(.frame_unexpected); // Protocol error
+                                log.err("Stream {d}: Received unexpected frame type {s} before HEADERS frame", .{ self.stream_id, @tagName(frame) });
+                                try self.connection.asyncClose(.frame_unexpected);
                                 return Http3Error.FrameUnexpected;
                             },
                             .data => {
-                                // DATA frame before HEADERS is a protocol error on a request stream.
                                 log.err("Stream {d}: Received DATA frame before HEADERS frame", .{self.stream_id});
-                                try self.connection.asyncClose(.frame_unexpected); // Protocol error
+                                try self.connection.asyncClose(.frame_unexpected);
                                 return Http3Error.FrameUnexpected;
                             },
                             .reserved => {
-                                // Ignore reserved frames as per spec.
-                                log.debug("Stream {d}: Ignoring reserved frame type {} while waiting for headers", .{ self.stream_id, @toU64(@unionToTag(frame)) });
-                                return; // Do not return an error, just ignore
+                                log.debug("Stream {d}: Ignoring reserved frame while waiting for headers", .{self.stream_id});
+                                return;
                             },
                             else => {
-                                // Received an unknown frame type to start a stream.
-                                log.err("Stream {d}: Received unknown frame type {} to start stream", .{ self.stream_id, @toU64(@unionToTag(frame)) });
-                                try self.connection.asyncClose(.frame_unexpected); // Protocol error
+                                log.err("Stream {d}: Received unknown frame type {s} to start stream", .{ self.stream_id, @tagName(frame) });
+                                try self.connection.asyncClose(.frame_unexpected);
                                 return Http3Error.FrameUnexpected;
                             },
                         }
                     },
                     .reading_body => {
-                        // Expecting DATA frames for the request body or possibly trailer HEADERS
-                        switch (@unionToTag(frame)) {
+                        switch (frame) {
                             .data => {
                                 log.debug("Stream {d}: Processing DATA frame, payload len: {d}", .{ self.stream_id, frame.data.payload.len });
-                                // TODO: Append data payload to request body buffer in self.request.body.
-                                // Ensure Request struct has a mechanism to handle streaming body data.
+                                // TODO: Append to request body
                                 return http3_error.Unimplemented; // Placeholder
                             },
                             .headers => {
-                                // This could be trailer headers after the body.
                                 log.debug("Stream {d}: Processing trailer HEADERS frame", .{self.stream_id});
-                                // TODO: Decode and process trailer headers using QPACK.
-                                // Append to the request headers or store separately.
-                                // After processing trailers, the request is complete.
                                 self.parser_state = .request_complete;
                                 log.info("Stream {d}: Trailer HEADERS received, request complete", .{self.stream_id});
-                                // Request is now fully parsed, ready for dispatch.
                                 return http3_error.Unimplemented; // Placeholder
                             },
                             .reserved => {
-                                // Ignore reserved frames as per spec.
-                                log.debug("Stream {d}: Ignoring reserved frame type {} while reading body", .{ self.stream_id, @toU64(@unionToTag(frame)) });
-                                return; // Do not return an error, just ignore
+                                log.debug("Stream {d}: Ignoring reserved frame while reading body", .{self.stream_id});
+                                return;
                             },
                             else => {
-                                // Received an unexpected frame type while reading body.
-                                log.err("Stream {d}: Received unexpected frame type {} while reading body", .{ self.stream_id, @tagName(@unionToTag(frame)) });
-                                try self.connection.asyncClose(.frame_unexpected); // Protocol error
+                                log.err("Stream {d}: Received unexpected frame type {s} while reading body", .{ self.stream_id, @tagName(frame) });
+                                try self.connection.asyncClose(.frame_unexpected);
                                 return Http3Error.FrameUnexpected;
                             },
                         }
                     },
                     .request_complete => {
-                        // Should not receive frames after the request is complete, unless it's a late frame.
-                        // DATA or HEADERS after request complete (without being trailers) is an error.
-                        switch (@unionToTag(frame)) {
+                        switch (frame) {
                             .data, .headers => {
                                 log.err("Stream {d}: Received DATA or HEADERS frame after request complete", .{self.stream_id});
-                                try self.connection.asyncClose(.frame_unexpected); // Protocol error
+                                try self.connection.asyncClose(.frame_unexpected);
                                 return Http3Error.FrameUnexpected;
                             },
                             .reserved => {
-                                // Ignore reserved frames as per spec.
-                                log.debug("Stream {d}: Ignoring reserved frame type {} after request complete", .{ self.stream_id, @toU64(@unionToTag(frame)) });
-                                return; // Do not return an error, just ignore
+                                log.debug("Stream {d}: Ignoring reserved frame after request complete", .{self.stream_id});
+                                return;
                             },
                             else => {
-                                log.warn("Stream {d}: Received unexpected frame type {} after request complete, ignoring", .{ self.stream_id, @tagName(@unionToTag(frame)) });
-                                // Treat as ignorable if not explicitly an error frame? Check spec.
-                                return; // For now, ignore
+                                log.warn("Stream {d}: Received unexpected frame type {s} after request complete, ignoring", .{ self.stream_id, @tagName(frame) });
+                                return;
                             },
                         }
                     },
-                    .processing, .sending, .half_closed_local, .half_closed_remote, .closed, .errored => {
-                        // Should not receive frames that affect the request parsing state machine in these states.
-                        // Some control frames (GOAWAY, RESET_STREAM, STOP_SENDING) might be received,
-                        // but they apply to the connection or the stream state, not the parser state.
-                        // These are generally handled by handleReadData or the connection's event loop.
-                        log.warn("Stream {d}: Received frame {} in unexpected parser state {} while in stream state {}, ignoring frame for parser.", .{ self.stream_id, @tagName(@unionToTag(frame)), @tagName(self.parser_state), @tagName(self.state) });
-                        // Do not return an error just for parser state, let the stream/connection state handle it.
-                        return; // Ignore frame for parser state machine
+                    else => {
+                        log.warn("Stream {d}: Received frame {s} in unexpected parser state {s}, ignoring", .{ self.stream_id, @tagName(frame), @tagName(self.parser_state) });
+                        return;
                     },
                 }
             },
-            // TODO: Add handling for WEBTRANSPORT streams if needed
-            // .webtransport => { ... }
-
             else => {
-                // Received a frame on a stream type that is not yet handled (e.g., WEBTRANSPORT_STREAM)
-                log.warn("Stream {d}: Received frame {} on unhandled stream type {}", .{ self.stream_id, @tagName(@unionToTag(frame)), self.stream_type });
-                // Depending on spec/requirements, might close the stream or ignore.
+                log.warn("Stream {d}: Received frame {s} on unhandled stream type {s}", .{ self.stream_id, @tagName(frame), self.stream_type });
                 return http3_error.Unimplemented; // Placeholder
             },
         }

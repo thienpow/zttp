@@ -680,11 +680,11 @@ pub const Connection = struct {
 
         self.state = .closing;
 
-        var pkt = try Packet.create(self.allocator, .connection_close);
-        errdefer {
-            pkt.deinit();
-            self.allocator.destroy(pkt);
-        }
+        // var pkt = try Packet.create(self.allocator, .connection_close);
+        // errdefer {
+        //     pkt.deinit();
+        //     self.allocator.destroy(pkt);
+        // }
 
         var buffer: [32]u8 = undefined;
         var cursor: usize = 0;
@@ -692,10 +692,10 @@ pub const Connection = struct {
         cursor += try serialize_vli(error_code, buffer[cursor..]);
         cursor += try serialize_vli(0x1c, buffer[cursor..]);
         cursor += try serialize_vli(reason.len, buffer[cursor..]);
-        try pkt.raw_data.appendSlice(buffer[0..cursor]);
-        try pkt.raw_data.appendSlice(reason);
+        //try pkt.raw_data.appendSlice(buffer[0..cursor]);
+        //try pkt.raw_data.appendSlice(reason);
 
-        try self.outgoing_packets.append(pkt);
+        //try self.outgoing_packets.append(pkt);
 
         self.event_callback(self, .{ .connection_closed = .{
             .error_code = error_code,

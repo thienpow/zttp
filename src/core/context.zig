@@ -1,4 +1,4 @@
-// src/context.zig
+// src/core/context.zig
 const std = @import("std");
 
 pub const Context = struct {

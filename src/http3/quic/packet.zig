@@ -78,7 +78,7 @@ pub const Packet = struct {
 
     /// Create a new packet
     pub fn init(allocator: Allocator, packet_type: PacketType) !*Packet {
-        var pkt = try allocator.create(Packet);
+        const pkt = try allocator.create(Packet);
         errdefer allocator.destroy(pkt);
 
         pkt.* = .{
@@ -117,7 +117,7 @@ pub fn parsePacket(allocator: Allocator, data: []const u8) !*Packet {
     const first_byte = data[0];
     var packet_type: PacketType = undefined;
     var parsed_header: PacketHeader = undefined;
-    var payload_bytes: []const u8 = &[];
+    var payload_bytes: []const u8 = &.{};
 
     if ((first_byte & 0x80) != 0) {
         // Long Header Packet

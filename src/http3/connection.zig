@@ -39,7 +39,7 @@ const handler = @import("handler.zig");
 const Http3Handler = handler.Http3Handler;
 
 // Import QUIC library interface from our implementation
-const quic = @import("../quic/mod.zig");
+const quic = @import("quic/mod.zig");
 
 /// Represents a HTTP/3 connection over QUIC
 pub const QuicConnection = struct {

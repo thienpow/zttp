@@ -27,6 +27,7 @@ pub const QpackDecoder = struct {
     /// Initializes a new QPACK decoder.
     /// max_table_capacity and max_blocked_streams are from the peer's SETTINGS frame.
     pub fn init(allocator: Allocator, max_table_capacity: u64, max_blocked_streams: u64) !QpackDecoder {
+        _ = allocator;
         log.debug("Initializing QPACK Decoder with max_table_capacity={} and max_blocked_streams={}", .{ max_table_capacity, max_blocked_streams });
         // TODO: Initialize QPACK decoder state and structures.
         // This includes setting up the dynamic table with the given capacity.
@@ -46,7 +47,6 @@ pub const QpackDecoder = struct {
     /// May require state from the decoder stream if dynamic table entries are referenced that haven't been acknowledged.
     pub fn decodeHeaders(self: *QpackDecoder, header_block: []const u8) anyerror!HeaderMap {
         _ = self; // Unused
-        _ = header_block; // Unused
         log.debug("Decoding QPACK header block (len={d})", .{header_block.len});
         // TODO: Implement QPACK header decoding according to RFC 9204 Section 3.3.1.
         // This involves processing prefix, static/dynamic table references, and literal headers.
@@ -64,7 +64,6 @@ pub const QpackDecoder = struct {
     /// This function is called by the connection or stream handling the decoder stream.
     pub fn handleDecoderStreamData(self: *QpackDecoder, data: []const u8) anyerror!void {
         _ = self; // Unused
-        _ = data; // Unused
         log.debug("Handling QPACK decoder stream data (len={d})", .{data.len});
         // TODO: Parse and apply decoder instructions (e.g., Insert With Name Ref, Insert Without Name Ref, Duplicate, Set Dynamic Table Capacity, Stream Cancellation).
         // These instructions update the dynamic table or decoder state.

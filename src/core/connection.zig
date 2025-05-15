@@ -1,4 +1,3 @@
-// src/core/connection.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -32,7 +31,13 @@ const utils = @import("../utils.zig");
 
 const http2 = @import("../http2/mod.zig");
 const Http2Connection = http2.Http2Connection;
-const Stream = http2.Stream;
+const Http2Stream = http2.Stream;
+
+const http3 = @import("../http3/mod.zig");
+const QuicConnection = http3.QuicConnection;
+const QuicStream = http3.QuicStream;
+
+const tls = @import("tls.zig");
 
 const log = std.log.scoped(.connection);
 
@@ -45,6 +50,7 @@ const ConnectionError = error{
     InvalidWebSocketKey,
     UnexpectedResult,
     NoAsyncIo,
+    QuicProcessingFailed,
 };
 
 pub const Connection = struct {
@@ -53,12 +59,17 @@ pub const Connection = struct {
     allocator: Allocator,
     state: State,
     task_data: *ConnectionTaskData,
-    protocol: Protocol = .http1,
+    protocol: Protocol,
     http2_conn: ?*Http2Connection = null,
+    quic_conn: ?*QuicConnection = null,
+    tls_conn: ?*tls.TlsConnection,
+    quic_conn_id: ?[]const u8 = null,
+    remote_address: ?std.net.Address = null, // Added for HTTP/3
 
     pub const Protocol = enum {
         http1,
         http2,
+        http3,
     };
 
     pub const State = enum {
@@ -69,27 +80,33 @@ pub const Connection = struct {
         websocket_active,
         closing,
         closed,
-        reading_http2_preface,
         processing_http2,
+        processing_http3,
     };
 
-    pub fn init(server: *Server, conn: std.net.Server.Connection, allocator: Allocator) !*Connection {
+    pub fn init(server: *Server, fd: std.posix.fd_t, allocator: Allocator, tls_conn: ?*tls.TlsConnection, protocol: Protocol, quic_conn_id: ?[]const u8, remote_address: ?std.net.Address) !*Connection {
         const connection = try allocator.create(Connection);
         errdefer allocator.destroy(connection);
 
-        // must pass app_context_ptr like this, because connection object is refilled later, and ConnectionTaskData needed app_context_ptr earlier...
-        // so don't refactor this on first impression.
         const task_data = try ConnectionTaskData.init(allocator, connection, server.options.app_context_ptr);
         errdefer task_data.deinit(allocator);
 
         connection.* = .{
             .server = server,
-            .fd = conn.stream.handle,
+            .fd = fd,
             .allocator = allocator,
-            .state = .reading_request,
+            .state = switch (protocol) {
+                .http1 => .reading_request,
+                .http2 => .processing_http2,
+                .http3 => .processing_http3,
+            },
             .task_data = task_data,
-            .protocol = .http1,
+            .protocol = protocol,
             .http2_conn = null,
+            .quic_conn = null,
+            .tls_conn = tls_conn,
+            .quic_conn_id = quic_conn_id,
+            .remote_address = remote_address,
         };
 
         try connection.startReading();
@@ -97,78 +114,48 @@ pub const Connection = struct {
     }
 
     pub fn deinit(self: *Connection) void {
-        // Clean up HTTP/2 streams
         if (self.http2_conn) |http2_conn| {
             http2_conn.deinit();
             self.allocator.destroy(http2_conn);
-            self.http2_conn = null;
         }
-
+        if (self.quic_conn) |quic_conn| {
+            quic_conn.deinit();
+            self.allocator.destroy(quic_conn);
+        }
+        if (self.tls_conn) |tls_conn| {
+            tls_conn.deinit();
+        }
+        if (self.quic_conn_id) |conn_id| {
+            self.allocator.free(conn_id);
+        }
         self.task_data.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
     pub fn startReading(self: *Connection) !void {
-        if (self.state == .reading_http2_preface) {
-            try self.readPreface();
-        } else if (self.state == .processing_http2) {
-            try self.readHttp2Frame();
-        } else {
-            try self.readNext();
+        switch (self.protocol) {
+            .http1 => try self.readNext(),
+            .http2 => try self.readHttp2Frame(),
+            .http3 => try self.readHttp3Packet(),
         }
     }
 
     fn readNext(self: *Connection) !void {
-        if (self.state == .processing_http2) {
-            try self.readHttp2Frame();
-        } else if (self.state == .reading_request) {
-            // Existing HTTP/1.1 logic
-            if (self.state != .reading_request) {
-                log.warn("readNext called in state: {}", .{self.state});
-                return;
-            }
-            self.task_data.request_buffer.clearAndFree();
-            log.debug("Cleared request buffer for FD {d}, size: {d}", .{ self.fd, self.task_data.request_buffer.items.len });
-
-            if (self.task_data.header_timer_task) |timer_task| {
-                self.server.async_io.?.cancel(timer_task, .{ .ptr = self.task_data, .cb = handleTimerCancelCompletion }) catch |err| {
-                    log.err("Failed to cancel header timer for FD {d}: {}", .{ self.fd, err });
-                };
-                self.task_data.header_timer_task = null;
-            }
-
-            const task_data = self.task_data;
-            const buffer_size = 65536;
-            try task_data.request_buffer.ensureTotalCapacity(buffer_size);
-            task_data.request_buffer.items.len = 0;
-            const buf = task_data.request_buffer.allocatedSlice()[0..buffer_size];
-
-            const read_task = try self.server.async_io.?.getTask();
-            read_task.* = .{
-                .userdata = task_data,
-                .callback = handleReadCompletion,
-                .req = .{ .recv = .{ .fd = self.fd, .buffer = buf } },
-            };
-            self.server.async_io.?.submission_q.push(read_task);
-
-            const timeout_ms = self.server.options.header_read_timeout_ms;
-            const timeout_ms_i64 = @min(timeout_ms, std.math.maxInt(i64));
-            const timeout_ts = Timespec{
-                .sec = @divTrunc(timeout_ms_i64, 1000),
-                .nsec = @intCast((timeout_ms_i64 % 1000) * 1_000_000),
-            };
-            const timer_task = try self.server.async_io.?.setTimer(timeout_ts, .{
-                .ptr = task_data,
-                .cb = handleHeaderTimeoutCompletion,
-            });
-            task_data.header_timer_task = timer_task;
-            log.debug("Scheduled header timeout for FD {d} ({d}ms)", .{ self.fd, timeout_ms });
+        if (self.state != .reading_request) {
+            log.warn("readNext called in state: {}", .{self.state});
+            return;
         }
-    }
+        self.task_data.request_buffer.clearAndFree();
 
-    fn readPreface(self: *Connection) !void {
+        if (self.task_data.header_timer_task) |timer_task| {
+            self.server.async_io.?.cancel(timer_task, .{ .ptr = self.task_data, .cb = handleTimerCancelCompletion }) catch |err| {
+                log.err("Failed to cancel header timer for FD {d}: {}", .{ self.fd, err });
+            };
+            self.task_data.header_timer_task = null;
+        }
+
         const task_data = self.task_data;
-        const buffer_size = 24; // HTTP/2 client preface size
+        const buffer_size = 65536;
         try task_data.request_buffer.ensureTotalCapacity(buffer_size);
         task_data.request_buffer.items.len = 0;
         const buf = task_data.request_buffer.allocatedSlice()[0..buffer_size];
@@ -176,15 +163,27 @@ pub const Connection = struct {
         const read_task = try self.server.async_io.?.getTask();
         read_task.* = .{
             .userdata = task_data,
-            .callback = handlePrefaceCompletion,
+            .callback = handleReadCompletion,
             .req = .{ .recv = .{ .fd = self.fd, .buffer = buf } },
         };
         self.server.async_io.?.submission_q.push(read_task);
+
+        const timeout_ms = self.server.options.header_read_timeout_ms;
+        const timeout_ms_i64 = @min(timeout_ms, std.math.maxInt(i64));
+        const timeout_ts = Timespec{
+            .sec = @divTrunc(timeout_ms_i64, 1000),
+            .nsec = @intCast((timeout_ms_i64 % 1000) * 1_000_000),
+        };
+        const timer_task = try self.server.async_io.?.setTimer(timeout_ts, .{
+            .ptr = task_data,
+            .cb = handleHeaderTimeoutCompletion,
+        });
+        task_data.header_timer_task = timer_task;
     }
 
     fn readHttp2Frame(self: *Connection) !void {
         const task_data = self.task_data;
-        const buffer_size = 16384; // Max frame size (default)
+        const buffer_size = 16384;
         try task_data.request_buffer.ensureTotalCapacity(buffer_size);
         task_data.request_buffer.items.len = 0;
         const buf = task_data.request_buffer.allocatedSlice()[0..buffer_size];
@@ -198,6 +197,22 @@ pub const Connection = struct {
         self.server.async_io.?.submission_q.push(read_task);
     }
 
+    fn readHttp3Packet(self: *Connection) !void {
+        const task_data = self.task_data;
+        const buffer_size = 1500;
+        try task_data.request_buffer.ensureTotalCapacity(buffer_size);
+        task_data.request_buffer.items.len = 0;
+        const buf = task_data.request_buffer.allocatedSlice()[0..buffer_size];
+
+        const read_task = try self.server.async_io.?.getTask();
+        read_task.* = .{
+            .userdata = task_data,
+            .callback = handleHttp3PacketCompletion,
+            .req = .{ .recv = .{ .fd = self.fd, .buffer = buf } },
+        };
+        self.server.async_io.?.submission_q.push(read_task);
+    }
+
     pub fn asyncClose(self: *Connection) !void {
         if (self.state == .closed or self.state == .closing) return;
         self.state = .closing;
@@ -206,9 +221,12 @@ pub const Connection = struct {
             if (self.http2_conn) |http2_conn| {
                 try http2_conn.close();
             }
+        } else if (self.protocol == .http3) {
+            if (self.quic_conn) |quic_conn| {
+                try quic_conn.asyncClose(.no_error);
+            }
         }
 
-        // Cancel header timer
         if (self.task_data.header_timer_task) |timer_task| {
             self.server.async_io.?.cancel(timer_task, .{ .ptr = self.task_data, .cb = handleTimerCancelCompletion }) catch |err| {
                 log.err("Failed to cancel header timer for FD {d}: {}", .{ self.fd, err });
@@ -236,8 +254,9 @@ const ConnectionTaskData = struct {
     ws_handler: ?WebSocketHandlerFn = null,
     middleware_ctx: ?*MiddlewareContext = null,
     header_timer_task: ?*Task = null,
-    write_task_id: ?usize = null, // Track write task to prevent double processing
+    write_task_id: ?usize = null,
     http2_stream_responses: std.AutoHashMap(u31, *Response),
+    quic_stream_responses: std.AutoHashMap(u64, *Response), // Added for HTTP/3
 
     pub fn init(allocator: Allocator, conn: *Connection, app_context_ptr: *anyopaque) !*ConnectionTaskData {
         const ctx = try allocator.create(Context);
@@ -251,27 +270,22 @@ const ConnectionTaskData = struct {
             .ctx = ctx,
             .request_buffer = std.ArrayList(u8).init(allocator),
             .http2_stream_responses = std.AutoHashMap(u31, *Response).init(allocator),
+            .quic_stream_responses = std.AutoHashMap(u64, *Response).init(allocator),
         };
-        data.request_buffer.clearAndFree(); // Ensure empty
-        log.debug("Initialized request buffer for FD {d}, size: {d}", .{ conn.fd, data.request_buffer.items.len });
         return data;
     }
 
     pub fn deinit(self: *ConnectionTaskData, allocator: Allocator) void {
-        std.debug.assert(self.header_timer_task == null);
-
         if (self.req) |*req| {
             req.deinit();
             self.req = null;
         }
         if (self.res) |res| {
-            log.debug("Deinit task_data.res for FD {d} in ConnectionTaskData.deinit", .{self.conn.fd});
             res.deinit();
             allocator.destroy(res);
             self.res = null;
         }
         if (self.ws_ctx) |ws_ctx| {
-            log.warn("Deinit called with non-null ws_ctx for FD {d}. Potential double-free risk.", .{self.conn.fd});
             ws_ctx.deinit();
             allocator.destroy(ws_ctx);
             self.ws_ctx = null;
@@ -289,7 +303,13 @@ const ConnectionTaskData = struct {
         }
         self.http2_stream_responses.deinit();
 
-        self.request_buffer.clearAndFree(); // Ensure buffer is cleared
+        var quic_res_it = self.quic_stream_responses.iterator();
+        while (quic_res_it.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            allocator.destroy(entry.value_ptr.*);
+        }
+        self.quic_stream_responses.deinit();
+
         self.request_buffer.deinit();
         self.ctx.deinit();
         allocator.destroy(self.ctx);
@@ -301,9 +321,7 @@ fn sendErrorAsync(task_data: *ConnectionTaskData, status: StatusCode, message: [
     const conn = task_data.conn;
     if (conn.state == .closed or conn.state == .closing) return;
 
-    // Clean up existing response if it exists
     if (task_data.res) |res| {
-        log.debug("Cleaning up existing response for FD {d} before sending error", .{conn.fd});
         res.deinit();
         conn.allocator.destroy(res);
         task_data.res = null;
@@ -312,7 +330,6 @@ fn sendErrorAsync(task_data: *ConnectionTaskData, status: StatusCode, message: [
     const res = try conn.allocator.create(Response);
     errdefer conn.allocator.destroy(res);
     res.* = Response.init(conn.allocator);
-    log.debug("Created new response for FD {d}: status={s}", .{ conn.fd, status.reason() });
     task_data.res = res;
     errdefer {
         res.deinit();
@@ -320,7 +337,7 @@ fn sendErrorAsync(task_data: *ConnectionTaskData, status: StatusCode, message: [
     }
 
     res.status = status;
-    try res.setBody(message); // Avoid redundant allocation
+    try res.setBody(message);
 
     conn.state = .sending_response;
     try sendResponseAsync(task_data);
@@ -337,12 +354,7 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) !void {
             try conn.asyncClose();
             return;
         },
-        else => {
-            log.err("Unexpected result type in handleReadCompletion for FD {d}", .{conn.fd});
-            conn.state = .closing;
-            try conn.asyncClose();
-            return error.UnexpectedResult;
-        },
+        else => return error.UnexpectedResult,
     };
 
     if (bytes_read == 0) {
@@ -352,16 +364,12 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) !void {
         return;
     }
 
-    // Adjust buffer length to reflect actual bytes read
     task_data.request_buffer.items.len = bytes_read;
-    log.debug("Read {d} bytes on FD {d}. Total buffer: {d}", .{ bytes_read, conn.fd, task_data.request_buffer.items.len });
-    log.debug("Request data: {s}", .{task_data.request_buffer.items[0..@min(task_data.request_buffer.items.len, 1024)]});
 
     _ = processRequest(task_data) catch |err| switch (err) {
         error.RequestTooLarge => {
-            log.debug("Parse error on FD {d}: {}. Buffer content: {s}", .{ conn.fd, err, task_data.request_buffer.items[0..@min(task_data.request_buffer.items.len, 1024)] });
             try sendErrorAsync(task_data, .payload_too_large, "Request entity too large");
-            task_data.request_buffer.clearAndFree(); // Clear buffer
+            task_data.request_buffer.clearAndFree();
             conn.state = .closing;
             try conn.asyncClose();
             return;
@@ -378,14 +386,13 @@ fn handleReadCompletion(_: *AsyncIo, task: *Task) !void {
         error.InvalidMultipart,
         error.BodyTooLarge,
         => {
-            log.debug("Parse error on FD {d}: {}", .{ conn.fd, err });
             try sendErrorAsync(task_data, .bad_request, "Invalid request");
-            task_data.request_buffer.clearAndFree(); // Clear buffer
+            task_data.request_buffer.clearAndFree();
             return;
         },
         else => {
             log.err("Unexpected error on FD {d}: {}", .{ conn.fd, err });
-            task_data.request_buffer.clearAndFree(); // Clear buffer
+            task_data.request_buffer.clearAndFree();
             conn.state = .closing;
             try conn.asyncClose();
             return;
@@ -401,8 +408,7 @@ fn handleHeaderTimeoutCompletion(_: *AsyncIo, task: *Task) !void {
     const task_data: *ConnectionTaskData = @ptrCast(@alignCast(task.userdata));
     const conn = task_data.conn;
 
-    const result = task.result orelse return error.NoResult;
-    switch (result) {
+    switch (task.result orelse return error.NoResult) {
         .timer => |_| {
             if (conn.state == .reading_request) {
                 log.warn("Header timeout on FD {d}", .{conn.fd});
@@ -411,7 +417,7 @@ fn handleHeaderTimeoutCompletion(_: *AsyncIo, task: *Task) !void {
             }
         },
         else => {
-            log.err("Unexpected result type in handleHeaderTimeoutCompletion for FD {d}", .{conn.fd});
+            log.err("Unexpected result type for FD {d}", .{conn.fd});
             conn.state = .closing;
             try conn.asyncClose();
         },
@@ -422,11 +428,10 @@ fn handleTimerCancelCompletion(_: *AsyncIo, task: *Task) !void {
     const task_data: *ConnectionTaskData = @ptrCast(@alignCast(task.userdata));
     const conn = task_data.conn;
 
-    const result = task.result orelse return error.NoResult;
-    switch (result) {
+    switch (task.result orelse return error.NoResult) {
         .cancel => |_| log.debug("Header timer cancelled for FD {d}", .{conn.fd}),
         else => {
-            log.err("Unexpected result type in handleTimerCancelCompletion for FD {d}", .{conn.fd});
+            log.err("Unexpected result type for FD {d}", .{conn.fd});
             conn.state = .closing;
             try conn.asyncClose();
         },
@@ -448,6 +453,10 @@ fn processRequest(task_data: *ConnectionTaskData) !void {
 
     task_data.req = req;
     if (req.isWebSocketUpgrade()) {
+        if (conn.protocol != .http1) {
+            try sendErrorAsync(task_data, .bad_request, "WebSocket upgrade not supported over HTTP/2 or HTTP/3");
+            return;
+        }
         try handleWebSocketUpgrade(task_data);
     } else {
         try handleHttpRequest(task_data);
@@ -460,7 +469,6 @@ fn handleHttpRequest(task_data: *ConnectionTaskData) !void {
     const res = try conn.allocator.create(Response);
     errdefer conn.allocator.destroy(res);
     res.* = Response.init(conn.allocator);
-    log.debug("Created response for FD {d} in handleHttpRequest", .{conn.fd});
     task_data.res = res;
     errdefer {
         res.deinit();
@@ -498,8 +506,7 @@ fn handleHttpRequest(task_data: *ConnectionTaskData) !void {
             try res.setBody(try conn.allocator.dupe(u8, "Hello, World!"));
             try res.setHeader("Content-Type", "text/plain; charset=utf-8");
         } else {
-            if (res.status == .ok) res.status = .not_found;
-            // Clean up original response before sendErrorAsync
+            res.status = .not_found;
             res.deinit();
             conn.allocator.destroy(res);
             task_data.res = null;
@@ -518,7 +525,7 @@ fn sendResponseAsync(task_data: *ConnectionTaskData) !void {
     const res = task_data.res orelse return error.NoResponse;
 
     if (conn.state != .sending_response) {
-        log.debug("Invalid state for sending response on FD {d}: {any}", .{ conn.fd, conn.state });
+        log.debug("Invalid state for sending response on FD {d}: {}", .{ conn.fd, conn.state });
         return;
     }
 
@@ -530,7 +537,6 @@ fn sendResponseAsync(task_data: *ConnectionTaskData) !void {
         .req = .{ .write = .{ .fd = conn.fd, .buffer = buffer } },
     };
     task_data.write_task_id = @intFromPtr(task);
-    log.debug("Submitting write task {any} for FD {d}", .{ task_data.write_task_id, conn.fd });
     conn.server.async_io.?.submission_q.push(task);
 }
 
@@ -538,15 +544,12 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) !void {
     const task_data: *ConnectionTaskData = @ptrCast(@alignCast(task.userdata));
     const conn = task_data.conn;
 
-    // Check if task was already processed
     const task_id = @intFromPtr(task);
     if (task_data.write_task_id != task_id) {
-        log.warn("Unexpected write task ID {d} for FD {d}; expected {any}. Ignoring.", .{
-            task_id, conn.fd, task_data.write_task_id,
-        });
+        log.warn("Unexpected write task ID {d} for FD {d}", .{ task_id, conn.fd });
         return;
     }
-    task_data.write_task_id = null; // Clear task ID
+    task_data.write_task_id = null;
 
     if (task.req == .write) {
         conn.allocator.free(task.req.write.buffer);
@@ -554,34 +557,20 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) !void {
 
     const bytes_written = switch (task.result orelse return error.NoResult) {
         .write => |write_res| write_res catch |err| {
-            log.err("Write error on FD {d}: {any}", .{ conn.fd, err });
+            log.err("Write error on FD {d}: {}", .{ conn.fd, err });
             conn.state = .closing;
             _ = conn.server.connections.remove(conn.fd);
             try conn.asyncClose();
             return;
         },
-        else => {
-            log.err("Unexpected result type in handleWriteCompletion for FD {d}", .{conn.fd});
-            conn.state = .closing;
-            _ = conn.server.connections.remove(conn.fd);
-            try conn.asyncClose();
-            return error.UnexpectedResult;
-        },
+        else => return error.UnexpectedResult,
     };
     _ = bytes_written;
 
-    // Deinit response only if it exists and hasn't been deinitialized
     if (task_data.res) |res| {
-        log.debug("Deinit response for FD {d}: status={s}, body_len={any}", .{
-            conn.fd,
-            res.status.reason(),
-            if (res.body) |b| b.len else null,
-        });
-        //res.deinit();
+        res.deinit();
         conn.allocator.destroy(res);
         task_data.res = null;
-    } else {
-        log.warn("No response to deinit for FD {d} in handleWriteCompletion", .{conn.fd});
     }
 
     if (conn.state == .sending_response and task_data.req != null and task_data.req.?.isWebSocketUpgrade()) {
@@ -593,17 +582,14 @@ fn handleWriteCompletion(_: *AsyncIo, task: *Task) !void {
         task_data.req = null;
 
         if (is_keep_alive) {
-            log.debug("Keep-alive on FD {d}", .{conn.fd});
             conn.state = .reading_request;
             try conn.readNext();
         } else {
-            log.debug("Closing connection on FD {d}", .{conn.fd});
             conn.state = .closing;
             _ = conn.server.connections.remove(conn.fd);
             try conn.asyncClose();
         }
     } else {
-        log.err("No request after write on FD {d}", .{conn.fd});
         conn.state = .closing;
         _ = conn.server.connections.remove(conn.fd);
         try conn.asyncClose();
@@ -617,7 +603,6 @@ fn handleWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
     const res = try conn.allocator.create(Response);
     errdefer conn.allocator.destroy(res);
     res.* = Response.init(conn.allocator);
-    log.debug("Created response for FD {d} in handleWebSocketUpgrade", .{conn.fd});
     task_data.res = res;
     errdefer {
         res.deinit();
@@ -665,79 +650,41 @@ fn completeWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
 fn handleClose(_: *AsyncIo, task: *Task) !void {
     const conn: *Connection = @ptrCast(@alignCast(task.userdata));
 
-    _ = switch (task.result orelse return error.NoResult) {
+    switch (task.result orelse return error.NoResult) {
         .close => |res| res catch |err| {
-            log.err("Close error on FD {d}: {any}", .{ conn.fd, err });
+            log.err("Close error on FD {d}: {}", .{ conn.fd, err });
             return;
         },
         else => {
-            log.err("Unexpected result type in handleClose for FD {d}", .{conn.fd});
+            log.err("Unexpected result type for FD {d}", .{conn.fd});
             return;
         },
-    };
+    }
 
-    log.info("Connection closed on FD {d}", .{conn.fd});
     conn.state = .closed;
     _ = conn.server.connections.remove(conn.fd);
     conn.deinit();
 }
 
-// http2
+// Reader/Writer adapter functions
+fn fixedBufferStreamReadFn(context: *const anyopaque, buffer: []u8) !usize {
+    const stream: *std.io.FixedBufferStream([]const u8) = @ptrCast(@constCast(@alignCast(context)));
+    return stream.read(buffer);
+}
 
-fn handlePrefaceCompletion(_: *AsyncIo, task: *Task) !void {
-    const task_data: *ConnectionTaskData = @ptrCast(@alignCast(task.userdata));
-    const conn = task_data.conn;
+fn bufferedReaderReadFn(context: *const anyopaque, buffer: []u8) !usize {
+    const reader: *std.io.BufferedReader(4096, std.fs.File.Reader) = @ptrCast(@constCast(@alignCast(context)));
+    return reader.read(buffer);
+}
 
-    const bytes_read = switch (task.result orelse return error.NoResult) {
-        .recv => |res| res catch |err| {
-            log.err("Preface read error on FD {d}: {}", .{ conn.fd, err });
-            conn.state = .closing;
-            try conn.asyncClose();
-            return;
-        },
-        else => return error.UnexpectedResult,
-    };
+fn fileWriterWriteFn(context: *const anyopaque, buffer: []const u8) !usize {
+    const writer: std.fs.File.Writer = @ptrCast(@constCast(@alignCast(context)));
+    return writer.write(buffer);
+}
 
-    if (bytes_read < 24) {
-        log.debug("Incomplete preface on FD {d}, switching to HTTP/1.1", .{conn.fd});
-        conn.state = .reading_request;
-        conn.protocol = .http1;
-        try conn.readNext();
-        return;
-    }
-
-    const preface = task_data.request_buffer.items[0..24];
-    const expected_preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
-    if (!std.mem.eql(u8, preface, expected_preface)) {
-        log.debug("Invalid preface on FD {d}, switching to HTTP/1.1", .{conn.fd});
-        conn.state = .reading_request;
-        conn.protocol = .http1;
-        try conn.readNext();
-        return;
-    }
-
-    log.info("HTTP/2 preface received on FD {d}", .{conn.fd});
-    conn.protocol = .http2;
-    conn.state = .processing_http2;
-
-    // Initialize Http2Connection
-    const http2_conn = try conn.allocator.create(Http2Connection);
-    errdefer conn.allocator.destroy(http2_conn);
-
-    // Create a file reader for the socket file descriptor
-    const file = std.fs.File{ .handle = conn.fd };
-    var reader = std.io.bufferedReader(file.reader());
-    var writer = std.io.bufferedWriter(file.writer());
-
-    http2_conn.* = try Http2Connection.init(
-        conn.allocator,
-        reader.reader().any(),
-        writer.writer().any(),
-    );
-    conn.http2_conn = http2_conn;
-
-    task_data.request_buffer.clearAndFree();
-    try conn.readHttp2Frame();
+fn bufferedWriterWriteFn(context: *const anyopaque, buffer: []const u8) !usize {
+    const writer: *std.io.BufferedWriter(4096, std.fs.File.Writer) = @ptrCast(@constCast(@alignCast(context)));
+    return writer.write(buffer);
 }
 
 fn handleHttp2FrameCompletion(_: *AsyncIo, task: *Task) !void {
@@ -761,24 +708,54 @@ fn handleHttp2FrameCompletion(_: *AsyncIo, task: *Task) !void {
         return;
     }
 
-    // Feed data to Http2Connection
+    if (conn.http2_conn == null) {
+        const http2_conn = try conn.allocator.create(Http2Connection);
+        errdefer conn.allocator.destroy(http2_conn);
+
+        const file = std.fs.File{ .handle = conn.fd };
+        var buffered_reader = std.io.bufferedReader(file.reader());
+        const reader: std.io.AnyReader = if (conn.tls_conn) |tls_conn|
+            tls_conn.*.reader()
+        else
+            std.io.AnyReader{
+                .context = @ptrCast(&buffered_reader),
+                .readFn = bufferedReaderReadFn,
+            };
+
+        var buffered_writer = std.io.bufferedWriter(file.writer());
+        const writer: std.io.AnyWriter = if (conn.tls_conn) |tls_conn|
+            tls_conn.*.writer()
+        else
+            std.io.AnyWriter{
+                .context = @ptrCast(&buffered_writer),
+                .writeFn = bufferedWriterWriteFn,
+            };
+
+        http2_conn.* = try Http2Connection.init(
+            conn.allocator,
+            reader,
+            writer,
+        );
+        conn.http2_conn = http2_conn;
+    }
+
     if (conn.http2_conn) |http2_conn| {
         const buffer = task_data.request_buffer.items[0..bytes_read];
         var buffer_stream = std.io.fixedBufferStream(buffer);
-        http2_conn.reader = buffer_stream.reader().any();
+        http2_conn.reader = std.io.AnyReader{
+            .context = @ptrCast(&buffer_stream),
+            .readFn = fixedBufferStreamReadFn,
+        };
 
-        // Process frames
         try http2_conn.processFrames();
 
-        // Process completed streams
         var stream_it = http2_conn.streams.streams.iterator();
-        while (stream_it.next()) |entry| {
-            const stream = entry.value_ptr.*;
+        while (stream_it.next()) |stream_entry| {
+            const stream = stream_entry.value_ptr.*;
             if (stream.request) |req| {
                 if (stream.state == .half_closed_remote or stream.state == .closed) {
                     if (task_data.http2_stream_responses.get(stream.id)) |existing_res| {
                         _ = existing_res;
-                        // Skip if response already processed
                         continue;
                     }
 
@@ -798,4 +775,80 @@ fn handleHttp2FrameCompletion(_: *AsyncIo, task: *Task) !void {
 
     task_data.request_buffer.clearAndFree();
     try conn.readHttp2Frame();
+}
+
+fn handleHttp3PacketCompletion(_: *AsyncIo, task: *Task) !void {
+    const task_data: *ConnectionTaskData = @ptrCast(@alignCast(task.userdata));
+    const conn = task_data.conn;
+
+    defer task_data.request_buffer.clearAndFree();
+
+    if (conn.protocol != .http3) {
+        log.err("Invalid protocol {s} for HTTP/3 packet handling on FD {d}", .{ @tagName(conn.protocol), conn.fd });
+        conn.state = .closing;
+        try conn.asyncClose();
+        return;
+    }
+
+    const bytes_read = switch (task.result orelse return error.NoResult) {
+        .recv => |res| res catch |err| {
+            log.err("QUIC packet read error on FD {d}: {}", .{ conn.fd, err });
+            conn.state = .closing;
+            try conn.asyncClose();
+            return;
+        },
+        else => return error.UnexpectedResult,
+    };
+
+    if (bytes_read == 0) {
+        log.debug("Connection closed by peer on FD {d}", .{conn.fd});
+        conn.state = .closing;
+        try conn.asyncClose();
+        return;
+    }
+
+    if (conn.quic_conn == null) {
+        const quic_conn = try conn.allocator.create(QuicConnection);
+        errdefer conn.allocator.destroy(quic_conn);
+
+        quic_conn.* = try QuicConnection.init(
+            conn.allocator,
+            conn.server,
+            conn.server.async_io.?,
+            conn.fd,
+            conn.remote_address orelse return error.QuicProcessingFailed,
+        );
+        try quic_conn.start();
+        conn.quic_conn = quic_conn;
+    }
+
+    if (conn.quic_conn) |quic_conn| {
+        const buffer = task_data.request_buffer.items[0..bytes_read];
+        try quic_conn.handleUdpData(buffer);
+
+        var stream_it = quic_conn.streams.valueIterator();
+        while (stream_it.next()) |stream_ptr| {
+            const stream = stream_ptr.*;
+            if (stream.request) |req| {
+                if (stream.state == .half_closed_remote or stream.state == .closed) {
+                    if (task_data.quic_stream_responses.get(stream.stream_id)) |existing_res| {
+                        _ = existing_res;
+                        continue;
+                    }
+
+                    const res = try conn.allocator.create(Response);
+                    errdefer conn.allocator.destroy(res);
+                    res.* = Response.init(conn.allocator);
+                    try task_data.quic_stream_responses.put(stream.stream_id, res);
+
+                    const route_handler = conn.server.router.getHandler(req.method, req.path, task_data.ctx) orelse utils.notFound;
+                    route_handler(req, res, task_data.ctx);
+
+                    try stream.sendResponse(res);
+                }
+            }
+        }
+    }
+
+    try conn.readHttp3Packet();
 }

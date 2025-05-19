@@ -105,7 +105,7 @@ pub const AsyncIo = struct {
             self.submission_q.push(task);
         }
 
-        const initial_len = self.submission_q.len();
+        const initial_len = self.submission_q.len;
         const prepped = try self.backend.submitAndWait(&self.submission_q);
         if (prepped < initial_len) {
             while (self.submission_q.pop()) |task| {

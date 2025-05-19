@@ -56,8 +56,8 @@ pub const IOUringBackend = struct {
             _ = try self.ring.submit_and_wait(1);
         } else {}
 
-        if (prepped_count < submission_q.len()) {
-            log.warn("Only prepped {}/{} tasks due to SQ full", .{ prepped_count, submission_q.len() });
+        if (prepped_count < submission_q.len) {
+            log.warn("Only prepped {}/{} tasks due to SQ full", .{ prepped_count, submission_q.len });
         }
         return prepped_count;
     }

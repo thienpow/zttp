@@ -2,6 +2,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
+const AsyncIo = @import("../async/async.zig").AsyncIo;
+const Task = @import("../async/task.zig").Task;
+const AsyncContext = @import("../async/async.zig").AsyncContext;
+
 const Server = @import("../core/server.zig").Server;
 const Context = @import("../core/context.zig").Context;
 const Request = @import("../http/request.zig").Request;
@@ -48,11 +52,32 @@ pub const Http3Handler = struct {
     pub fn handleNewStream(self: *Http3Handler, stream: *Http3Stream) !void {
         log.info("Handling stream {d} (type: {?})", .{ stream.stream_id, stream.stream_type });
         if (stream.stream_type == null) {
-            _ = try self.server.async_io.?.spawnTask(handleRequestStream, .{ self, stream });
+            const HandlerContext = struct {
+                handler: *Http3Handler,
+                stream: *Http3Stream,
+            };
+            const ctx_struct = try self.allocator.create(HandlerContext);
+            ctx_struct.* = .{ .handler = self, .stream = stream };
+            const ctx = AsyncContext{
+                .ptr = @as(*anyopaque, ctx_struct),
+                .cb = handleRequestStreamCallback,
+            };
+            _ = try self.server.async_io.?.noop(ctx);
+            try self.server.async_io.?.submit();
         }
     }
 
-    fn handleRequestStream(self: *Http3Handler, stream: *Http3Stream) !void {
+    fn handleRequestStreamCallback(async_io: *AsyncIo, task: *Task) anyerror!void {
+        const HandlerContext = struct {
+            handler: *Http3Handler,
+            stream: *Http3Stream,
+        };
+        const ctx = @as(*HandlerContext, @alignCast(@ptrCast(task.userdata.?)));
+        defer async_io.gpa.destroy(ctx);
+        try handleRequestStream(ctx.handler, ctx.stream);
+    }
+
+    fn handleRequestStream(self: *Http3Handler, stream: *Http3Stream) anyerror!void {
         log.debug("Handler task started for stream {d}", .{stream.stream_id});
 
         var req: ?Request = null;
@@ -65,17 +90,17 @@ pub const Http3Handler = struct {
         }
 
         while (stream.parser_state != .request_complete) {
-            try self.server.async_io.?.yield();
+            try self.server.async_io.?.submitAndWait();
             if (stream.state == .errored or stream.state == .closed) {
                 log.err("Stream {d} closed unexpectedly", .{stream.stream_id});
-                return Http3Error.FrameError;
+                return Http3Error.InvalidFrame;
             }
         }
 
         req = stream.request orelse {
             log.err("Stream {d}: Request missing after completion", .{stream.stream_id});
             try stream.handleResetStream(@intFromEnum(ErrorCode.internal_error));
-            return Http3Error.FrameError;
+            return Http3Error.InvalidFrame;
         };
         res = try Response.init(self.allocator);
         ctx = try Context.init(self.allocator, self.server.options.app_context_ptr, req.?, res.?);

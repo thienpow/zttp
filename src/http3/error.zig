@@ -1,3 +1,4 @@
+// src/http3/error.zig
 const std = @import("std");
 
 /// HTTP/3 error codes per RFC 9114 Section 8.1 and QUIC mappings.

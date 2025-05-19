@@ -18,6 +18,8 @@ const Connection = @import("connection.zig").Connection;
 const http2 = @import("../http2/mod.zig");
 const tls = @import("tls.zig");
 
+const Http3Handler = @import("../http3/handler.zig").Http3Handler;
+
 const log = std.log.scoped(.server);
 
 pub const Server = struct {
@@ -31,6 +33,7 @@ pub const Server = struct {
     websocket_fds: std.AutoHashMap(std.posix.fd_t, void),
     connections: std.AutoHashMap(std.posix.fd_t, *Connection),
     tls_ctx: ?*tls.TlsContext,
+    http3_handler: ?*Http3Handler = null,
 
     pub const Options = struct {
         app_context_ptr: *anyopaque,
@@ -125,6 +128,9 @@ pub const Server = struct {
             try std.posix.bind(udp_socket, &address.any, address.getOsSockLen());
             server.udp_socket = udp_socket;
             log.info("UDP socket created for QUIC/HTTP/3 on port {d}", .{options.port});
+
+            server.http3_handler = try Http3Handler.init(&server, allocator, &server.router);
+            log.info("HTTP/3 handler initialized", .{});
         }
 
         return server;
@@ -285,7 +291,7 @@ pub const Server = struct {
             log.info("TCP connection accepted on FD {d} (No TLS)", .{new_fd});
         }
 
-        const connection = Connection.init(server, new_fd, server.allocator, tls_conn, negotiated_protocol, null) catch |err| {
+        const connection = Connection.init(server, new_fd, server.allocator, tls_conn, negotiated_protocol, null, null) catch |err| {
             log.err("Failed to initialize connection for FD {d}: {s}", .{ new_fd, @errorName(err) });
             if (tls_conn == null) {
                 std.posix.close(new_fd);
@@ -363,7 +369,7 @@ pub const Server = struct {
 
         const quic_fd = server.udp_socket.?;
 
-        const connection = Connection.init(server, quic_fd, server.allocator, null, Connection.Protocol.http3, null) catch |err| {
+        const connection = Connection.init(server, quic_fd, server.allocator, null, Connection.Protocol.http3, null, null) catch |err| {
             log.err("Failed to initialize QUIC connection for FD {d}: {s}", .{ quic_fd, @errorName(err) });
             const buffer = try server.allocator.alloc(u8, 1500);
             _ = async_io.recv(server.udp_socket.?, buffer, .{

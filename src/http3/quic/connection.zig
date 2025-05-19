@@ -1,5 +1,5 @@
 // src/http3/quic/connection.zig
-// QUIC connection management
+// QUIC connection management per RFC 9000
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -15,9 +15,6 @@ const TlsContext = crypto.TlsContext;
 const packet = @import("packet.zig");
 const Packet = packet.Packet;
 const PacketType = packet.PacketType;
-const Frame = packet.Frame;
-const StreamFrame = packet.StreamFrame;
-const CryptoFrame = packet.CryptoFrame;
 
 const util = @import("util.zig");
 const parse_vli = util.parseVli;
@@ -48,6 +45,7 @@ pub const ConnectionOptions = struct {
     remote_address: std.net.Address,
     user_ctx: ?*anyopaque,
     event_callback: EventCallback,
+    version: u32 = 0x00000001, // QUIC version 1
     max_idle_timeout_ms: u64 = 30_000,
     max_udp_payload_size: u16 = 1350,
     initial_max_data: u64 = 10_000_000,
@@ -56,9 +54,10 @@ pub const ConnectionOptions = struct {
     initial_max_stream_data_uni: u64 = 1_000_000,
     initial_max_streams_bidi: u64 = 100,
     initial_max_streams_uni: u64 = 100,
+    initial_congestion_window: u64 = 12000,
 };
 
-/// QUIC Connection structure
+/// QUIC connection structure
 pub const Connection = struct {
     allocator: Allocator,
     role: ConnectionRole,
@@ -80,25 +79,25 @@ pub const Connection = struct {
     initial_max_stream_data_uni: u64,
     initial_max_streams_bidi: u64,
     initial_max_streams_uni: u64,
-    tls_ctx: ?*TlsContext,
+    tls_ctx: *TlsContext,
     bytes_in_flight: u64,
-    congestion_window: u64,
+    congestion_window: u64, // TODO: Implement congestion control
     next_packet_number: u64,
     streams: std.AutoHashMap(u64, *Stream),
     next_local_stream_id: u64,
     outgoing_packets: std.ArrayList(*Packet),
     latest_activity_time: i64,
     next_timeout: ?i64,
-    smoothed_rtt: i64,
-    rtt_variance: i64,
+    smoothed_rtt: i64, // TODO: Implement RTT estimation
+    rtt_variance: i64, // TODO: Implement RTT estimation
     packets_sent: u64,
     packets_received: u64,
     bytes_sent: u64,
     bytes_received: u64,
 
-    /// Initialize a new QUIC connection
+    /// Initializes a new QUIC connection.
     pub fn init(allocator: Allocator, options: ConnectionOptions) !*Connection {
-        var conn = try allocator.create(Connection);
+        const conn = try allocator.create(Connection);
         errdefer allocator.destroy(conn);
 
         var src_conn_id: [16]u8 = undefined;
@@ -109,6 +108,9 @@ pub const Connection = struct {
         if (options.role == .client) {
             std.crypto.random.bytes(&dst_conn_id);
         }
+
+        const tls_ctx = try crypto.createTlsContext(allocator, options.role == .server);
+        errdefer crypto.destroyTlsContext(tls_ctx);
 
         conn.* = .{
             .allocator = allocator,
@@ -122,7 +124,7 @@ pub const Connection = struct {
             .dst_connection_id = dst_conn_id,
             .src_connection_id_len = src_conn_id_len,
             .dst_connection_id_len = if (options.role == .client) 0 else 8,
-            .version = 0x00000001, // QUIC version 1
+            .version = options.version,
             .max_idle_timeout_ms = options.max_idle_timeout_ms,
             .max_udp_payload_size = options.max_udp_payload_size,
             .initial_max_data = options.initial_max_data,
@@ -131,14 +133,14 @@ pub const Connection = struct {
             .initial_max_stream_data_uni = options.initial_max_stream_data_uni,
             .initial_max_streams_bidi = options.initial_max_streams_bidi,
             .initial_max_streams_uni = options.initial_max_streams_uni,
-            .tls_ctx = null,
+            .tls_ctx = tls_ctx,
             .bytes_in_flight = 0,
-            .congestion_window = 12000,
+            .congestion_window = options.initial_congestion_window,
             .next_packet_number = 0,
             .streams = std.AutoHashMap(u64, *Stream).init(allocator),
             .next_local_stream_id = if (options.role == .client) 0 else 1,
             .outgoing_packets = std.ArrayList(*Packet).init(allocator),
-            .latest_activity_time = std.time.nanoTimestamp(),
+            .latest_activity_time = @intCast(std.time.nanoTimestamp()),
             .next_timeout = null,
             .smoothed_rtt = 500 * std.time.ns_per_ms,
             .rtt_variance = 250 * std.time.ns_per_ms,
@@ -148,43 +150,39 @@ pub const Connection = struct {
             .bytes_received = 0,
         };
 
-        conn.tls_ctx = try crypto.createTlsContext(allocator, options.role == .server);
-        errdefer crypto.destroyTlsContext(conn.tls_ctx.?);
-
         return conn;
     }
 
-    /// Clean up connection resources
+    /// Cleans up connection resources.
     pub fn deinit(self: *Connection) void {
+        defer self.streams.deinit();
         var stream_it = self.streams.valueIterator();
         while (stream_it.next()) |stream| {
             stream_mod.destroyStream(stream.*);
         }
-        self.streams.deinit();
 
+        defer self.outgoing_packets.deinit();
         for (self.outgoing_packets.items) |pkt| {
             pkt.deinit();
             self.allocator.destroy(pkt);
         }
-        self.outgoing_packets.deinit();
 
-        if (self.tls_ctx) |ctx| {
-            crypto.destroyTlsContext(ctx);
-        }
-
+        crypto.destroyTlsContext(self.tls_ctx);
         self.allocator.destroy(self);
     }
 
-    /// Process incoming packet data
+    /// Processes incoming packet data.
     pub fn processPacket(self: *Connection, data: []const u8) !void {
         if (data.len == 0) return error.EmptyPacket;
 
         const pkt = try packet.parsePacket(self.allocator, data);
         defer packet.destroyPacket(pkt);
 
-        self.latest_activity_time = std.time.nanoTimestamp();
+        self.latest_activity_time = @intCast(std.time.nanoTimestamp());
         self.bytes_received += data.len;
         self.packets_received += 1;
+
+        log.debug("Processing packet type: {}", .{pkt.packet_type});
 
         switch (pkt.packet_type) {
             .initial, .handshake, .zero_rtt, .retry => try self.processLongHeaderPacket(pkt),
@@ -196,7 +194,7 @@ pub const Connection = struct {
         self.updateTimeout();
     }
 
-    /// Process Long Header packet
+    /// Processes long header packets (Initial, Handshake, 0-RTT, Retry).
     fn processLongHeaderPacket(self: *Connection, pkt: *Packet) !void {
         const header_result = try self.removeHeaderProtection(pkt.packet_type, pkt.raw_data.items, 0, 0);
         pkt.packet_number = header_result.packet_number;
@@ -207,7 +205,7 @@ pub const Connection = struct {
         try self.processFrames(decrypted_payload);
 
         if (self.state == .handshaking) {
-            if (self.role == .server) {
+            if (self.role == .server and pkt.packet_type == .initial) {
                 self.state = .connected;
                 self.event_callback(self, .handshake_completed, self.user_ctx);
                 try self.simulateClientStreams();
@@ -218,7 +216,7 @@ pub const Connection = struct {
         }
     }
 
-    /// Process Short Header packet
+    /// Processes short header packets (1-RTT).
     fn processShortHeaderPacket(self: *Connection, pkt: *Packet) !void {
         const header_result = try self.removeHeaderProtection(pkt.packet_type, pkt.raw_data.items, 0, 0);
         pkt.packet_number = header_result.packet_number;
@@ -229,7 +227,7 @@ pub const Connection = struct {
         try self.processFrames(decrypted_payload);
     }
 
-    /// Process Connection Close packet
+    /// Processes CONNECTION_CLOSE packets.
     fn processConnectionClosePacket(self: *Connection, pkt: *Packet) !void {
         var cursor: usize = 0;
         var bytes_read: usize = 0;
@@ -264,8 +262,8 @@ pub const Connection = struct {
         }
     }
 
-    /// Parse a single QUIC frame
-    fn parseFrame(self: *Connection, data: []const u8, bytes_read_out: *usize) !Frame {
+    /// Parses a single QUIC frame from payload.
+    fn parseFrame(self: *Connection, data: []const u8, bytes_read_out: *usize) !packet.Frame {
         if (data.len == 0) return error.BufferTooShort;
 
         var cursor: usize = 0;
@@ -285,150 +283,179 @@ pub const Connection = struct {
         cursor += vli_read_len;
 
         switch (frame_type) {
-            0x02, 0x03 => {
-                const largest_ack = try parse_vli(data[cursor..], &vli_read_len);
-                cursor += vli_read_len;
-                const ack_delay = try parse_vli(data[cursor..], &vli_read_len);
-                cursor += vli_read_len;
-                const ack_range_count = try parse_vli(data[cursor..], &vli_read_len);
-                cursor += vli_read_len;
-                const first_ack_range = try parse_vli(data[cursor..], &vli_read_len);
-                cursor += vli_read_len;
-
-                var ack_ranges = std.ArrayList(struct { gap: u64, length: u64 }).init(self.allocator);
-                errdefer ack_ranges.deinit();
-
-                var i: u64 = 0;
-                while (i < ack_range_count) : (i += 1) {
-                    const gap = try parse_vli(data[cursor..], &vli_read_len);
-                    cursor += vli_read_len;
-                    const length = try parse_vli(data[cursor..], &vli_read_len);
-                    cursor += vli_read_len;
-                    try ack_ranges.append(.{ .gap = gap, .length = length });
-                }
-
-                bytes_read_out.* = cursor;
-                return .{ .ack = .{
-                    .largest_acknowledged = largest_ack,
-                    .ack_delay = ack_delay,
-                    .ack_range_count = ack_range_count,
-                    .first_ack_range = first_ack_range,
-                    .ack_ranges = ack_ranges,
-                } };
-            },
-            0x05 => {
-                if (data.len < cursor + 1) return error.BufferTooShort;
-                const stream_id = try parse_vli(data[cursor..], &vli_read_len);
-                cursor += vli_read_len;
-                const error_code = try parse_vli(data[cursor..], &vli_read_len);
-                cursor += vli_read_len;
-
-                bytes_read_out.* = cursor;
-                return .{ .stop_sending = .{
-                    .stream_id = stream_id,
-                    .error_code = error_code,
-                } };
-            },
-            0x06 => {
-                if (data.len < cursor + 1) return error.BufferTooShort;
-                const offset = try parse_vli(data[cursor..], &vli_read_len);
-                cursor += vli_read_len;
-                const length = try parse_vli(data[cursor..], &vli_read_len);
-                cursor += vli_read_len;
-                if (data.len < cursor + @as(usize, length)) return error.BufferTooShort;
-                const crypto_data = data[cursor .. cursor + @as(usize, length)];
-                cursor += @as(usize, length);
-
-                bytes_read_out.* = cursor;
-                return .{ .crypto = .{ .offset = offset, .data = crypto_data } };
-            },
-            0x08...0x0f => {
-                const flags = @as(u8, @intCast(frame_type)) & 0x07;
-                const has_offset = (flags & 0x01) != 0;
-                const has_length = (flags & 0x02) != 0;
-                const is_fin = (flags & 0x04) != 0;
-
-                const stream_id = try parse_vli(data[cursor..], &vli_read_len);
-                cursor += vli_read_len;
-
-                var offset: u64 = 0;
-                if (has_offset) {
-                    offset = try parse_vli(data[cursor..], &vli_read_len);
-                    cursor += vli_read_len;
-                }
-
-                var stream_data_end: usize = data.len;
-                var length: u64 = 0;
-                if (has_length) {
-                    length = try parse_vli(data[cursor..], &vli_read_len);
-                    cursor += vli_read_len;
-                    stream_data_end = cursor + @as(usize, length);
-                    if (data.len < stream_data_end) return error.BufferTooShort;
-                }
-
-                const stream_data = data[cursor..stream_data_end];
-                cursor = stream_data_end;
-
-                bytes_read_out.* = cursor;
-                return .{ .stream = .{
-                    .stream_id = stream_id,
-                    .offset = offset,
-                    .length = @as(u64, stream_data.len),
-                    .fin = is_fin,
-                    .data = stream_data,
-                } };
-            },
-            0x0c => {
-                if (data.len < cursor + 1) return error.BufferTooShort;
-                const stream_id = try parse_vli(data[cursor..], &vli_read_len);
-                cursor += vli_read_len;
-                const max_data = try parse_vli(data[cursor..], &vli_read_len);
-                cursor += vli_read_len;
-
-                bytes_read_out.* = cursor;
-                return .{ .max_stream_data = .{
-                    .stream_id = stream_id,
-                    .max_data = max_data,
-                } };
-            },
+            0x02, 0x03 => return try self.parseAckFrame(data, cursor, bytes_read_out),
+            0x05 => return try self.parseStopSendingFrame(data, cursor, bytes_read_out),
+            0x06 => return try self.parseCryptoFrame(data, cursor, bytes_read_out),
+            0x08...0x0f => return try self.parseStreamFrame(data, cursor, frame_type, bytes_read_out),
+            0x0c => return try self.parseMaxStreamDataFrame(data, cursor, bytes_read_out),
             else => return error.UnknownFrameType,
         }
     }
 
-    /// Process frames from decrypted payload
+    /// Parses ACK frame.
+    fn parseAckFrame(self: *Connection, data: []const u8, cursor_in: usize, bytes_read_out: *usize) !packet.Frame {
+        var cursor = cursor_in;
+        var vli_read_len: usize = 0;
+
+        const largest_ack = try parse_vli(data[cursor..], &vli_read_len);
+        cursor += vli_read_len;
+        const ack_delay = try parse_vli(data[cursor..], &vli_read_len);
+        cursor += vli_read_len;
+        const ack_range_count = try parse_vli(data[cursor..], &vli_read_len);
+        cursor += vli_read_len;
+        const first_ack_range = try parse_vli(data[cursor..], &vli_read_len);
+        cursor += vli_read_len;
+
+        var ack_ranges = std.ArrayList(struct { gap: u64, length: u64 }).init(self.allocator);
+        errdefer ack_ranges.deinit();
+
+        var i: u64 = 0;
+        while (i < ack_range_count) : (i += 1) {
+            const gap = try parse_vli(data[cursor..], &vli_read_len);
+            cursor += vli_read_len;
+            const length = try parse_vli(data[cursor..], &vli_read_len);
+            cursor += vli_read_len;
+            try ack_ranges.append(.{ .gap = gap, .length = length });
+        }
+
+        bytes_read_out.* = cursor;
+        return .{ .ack = .{
+            .largest_acknowledged = largest_ack,
+            .ack_delay = ack_delay,
+            .ack_range_count = ack_range_count,
+            .first_ack_range = first_ack_range,
+            .ack_ranges = ack_ranges,
+        } };
+    }
+
+    /// Parses STOP_SENDING frame.
+    fn parseStopSendingFrame(self: *Connection, data: []const u8, cursor_in: usize, bytes_read_out: *usize) !packet.Frame {
+        _ = self;
+        var cursor = cursor_in;
+        var vli_read_len: usize = 0;
+
+        const stream_id = try parse_vli(data[cursor..], &vli_read_len);
+        cursor += vli_read_len;
+        const error_code = try parse_vli(data[cursor..], &vli_read_len);
+        cursor += vli_read_len;
+
+        bytes_read_out.* = cursor;
+        return .{ .stop_sending = .{
+            .stream_id = stream_id,
+            .error_code = error_code,
+        } };
+    }
+
+    /// Parses CRYPTO frame.
+    fn parseCryptoFrame(self: *Connection, data: []const u8, cursor_in: usize, bytes_read_out: *usize) !packet.Frame {
+        _ = self;
+        var cursor = cursor_in;
+        var vli_read_len: usize = 0;
+
+        const offset = try parse_vli(data[cursor..], &vli_read_len);
+        cursor += vli_read_len;
+        const length = try parse_vli(data[cursor..], &vli_read_len);
+        cursor += vli_read_len;
+        if (data.len < cursor + @as(usize, length)) return error.BufferTooShort;
+        const crypto_data = data[cursor .. cursor + @as(usize, length)];
+        cursor += @as(usize, length);
+
+        bytes_read_out.* = cursor;
+        return .{ .crypto = .{ .offset = offset, .data = crypto_data } };
+    }
+
+    /// Parses STREAM frame.
+    fn parseStreamFrame(self: *Connection, data: []const u8, cursor_in: usize, frame_type: u64, bytes_read_out: *usize) !packet.Frame {
+        _ = self;
+        var cursor = cursor_in;
+        var vli_read_len: usize = 0;
+
+        const flags = @as(u8, @intCast(frame_type)) & 0x07;
+        const has_offset = (flags & 0x01) != 0;
+        const has_length = (flags & 0x02) != 0;
+        const is_fin = (flags & 0x04) != 0;
+
+        const stream_id = try parse_vli(data[cursor..], &vli_read_len);
+        cursor += vli_read_len;
+
+        var offset: u64 = 0;
+        if (has_offset) {
+            offset = try parse_vli(data[cursor..], &vli_read_len);
+            cursor += vli_read_len;
+        }
+
+        var stream_data_end: usize = data.len;
+        var length: u64 = 0;
+        if (has_length) {
+            length = try parse_vli(data[cursor..], &vli_read_len);
+            cursor += vli_read_len;
+            stream_data_end = cursor + @as(usize, length);
+            if (data.len < stream_data_end) return error.BufferTooShort;
+        }
+
+        const stream_data = data[cursor..stream_data_end];
+        cursor = stream_data_end;
+
+        bytes_read_out.* = cursor;
+        return .{ .stream = .{
+            .stream_id = stream_id,
+            .offset = offset,
+            .length = @as(u64, stream_data.len),
+            .fin = is_fin,
+            .data = stream_data,
+        } };
+    }
+
+    /// Parses MAX_STREAM_DATA frame.
+    fn parseMaxStreamDataFrame(self: *Connection, data: []const u8, cursor_in: usize, bytes_read_out: *usize) !packet.Frame {
+        _ = self;
+        var cursor = cursor_in;
+        var vli_read_len: usize = 0;
+
+        const stream_id = try parse_vli(data[cursor..], &vli_read_len);
+        cursor += vli_read_len;
+        const max_data = try parse_vli(data[cursor..], &vli_read_len);
+        cursor += vli_read_len;
+
+        bytes_read_out.* = cursor;
+        return .{ .max_stream_data = .{
+            .stream_id = stream_id,
+            .max_data = max_data,
+        } };
+    }
+
+    /// Processes frames from decrypted payload.
     fn processFrames(self: *Connection, payload: []const u8) !void {
         var cursor: usize = 0;
         while (cursor < payload.len) {
             var bytes_read: usize = 0;
             const frame = try self.parseFrame(payload[cursor..], &bytes_read);
+            log.debug("Processing frame: {}", .{@tagName(frame)});
             try self.processFrame(frame);
             cursor += bytes_read;
         }
     }
 
-    /// Process a single QUIC frame
-    fn processFrame(self: *Connection, frame: Frame) !void {
+    /// Processes a single QUIC frame.
+    fn processFrame(self: *Connection, frame: packet.Frame) !void {
         switch (frame) {
-            .padding => {},
-            .ping => {},
+            .padding => log.debug("Received PADDING frame", .{}),
+            .ping => log.debug("Received PING frame", .{}),
             .ack => |ack_frame| {
-                // Update congestion control and retransmission
-                for (ack_frame.ack_ranges.items) |range| {
-                    // TODO: Mark packets in range as acknowledged
-                    _ = range;
-                }
+                log.debug("Received ACK frame, largest_ack={d}", .{ack_frame.largest_acknowledged});
+                // TODO: Mark packets as acknowledged for congestion control
                 ack_frame.ack_ranges.deinit();
             },
             .crypto => |crypto_frame| try self.processCryptoFrame(crypto_frame),
             .stream => |stream_frame| try self.processStreamFrame(stream_frame),
             .stop_sending => |stop_sending| {
-                // Notify stream to stop sending
+                log.debug("Received STOP_SENDING for stream {d}, code={d}", .{ stop_sending.stream_id, stop_sending.error_code });
                 if (self.streams.get(stop_sending.stream_id)) |stream| {
                     try stream.handleStopSending(stop_sending.error_code);
                 }
             },
             .max_stream_data => |max_stream_data| {
-                // Update stream's flow control window
+                log.debug("Received MAX_STREAM_DATA for stream {d}, max={d}", .{ max_stream_data.stream_id, max_stream_data.max_data });
                 if (self.streams.get(max_stream_data.stream_id)) |stream| {
                     try stream.updateMaxStreamData(max_stream_data.max_data);
                 }
@@ -437,27 +464,35 @@ pub const Connection = struct {
         }
     }
 
-    /// Process CRYPTO frame
-    fn processCryptoFrame(self: *Connection, frame: CryptoFrame) !void {
-        if (self.tls_ctx == null) return error.NoTlsContext;
-        // Pass crypto data to TLS context for handshake processing
-        try crypto.processCryptoData(self.tls_ctx.?, frame.data, frame.offset);
-        // Check if handshake is complete
-        if (crypto.isHandshakeComplete(self.tls_ctx.?)) {
+    /// Processes CRYPTO frame for TLS handshake.
+    fn processCryptoFrame(self: *Connection, frame: packet.CryptoFrame) !void {
+        log.debug("Processing CRYPTO frame, offset={d}, len={d}", .{ frame.offset, frame.data.len });
+        try crypto.processCryptoData(self.tls_ctx, frame.data, frame.offset);
+        if (crypto.isHandshakeComplete(self.tls_ctx)) {
             self.state = .connected;
             self.event_callback(self, .handshake_completed, self.user_ctx);
         }
     }
 
-    /// Process STREAM frame
-    fn processStreamFrame(self: *Connection, frame: StreamFrame) !void {
+    /// Processes STREAM frame for stream data.
+    fn processStreamFrame(self: *Connection, frame: packet.StreamFrame) !void {
         const is_client_initiated = (frame.stream_id % 2) == 0;
         const is_unidirectional = (frame.stream_id & 0x02) != 0;
         const is_peer_initiated = (self.role == .client and !is_client_initiated) or
             (self.role == .server and is_client_initiated);
 
+        log.debug("Processing STREAM frame, stream={d}, offset={d}, len={d}, fin={}", .{
+            frame.stream_id, frame.offset, frame.length, frame.fin,
+        });
+
         var stream = self.streams.get(frame.stream_id);
         if (stream == null and is_peer_initiated) {
+            if (is_unidirectional and frame.stream_id >= self.initial_max_streams_uni * 4) {
+                return error.StreamLimitExceeded;
+            }
+            if (!is_unidirectional and frame.stream_id >= self.initial_max_streams_bidi * 4) {
+                return error.StreamLimitExceeded;
+            }
             stream = try stream_mod.createStream(self.allocator, self, frame.stream_id, is_unidirectional);
             try self.streams.put(frame.stream_id, stream.?);
             self.event_callback(self, .{ .new_stream = .{
@@ -471,7 +506,7 @@ pub const Connection = struct {
         try stream.?.processStreamData(frame.data, frame.offset, frame.fin);
     }
 
-    /// Remove header protection (RFC 9001, Section 5.4)
+    /// Removes header protection per RFC 9001, Section 5.4.
     fn removeHeaderProtection(
         self: *Connection,
         packet_type: PacketType,
@@ -480,27 +515,21 @@ pub const Connection = struct {
         offset_to_pn: usize,
     ) !struct { unprotected_first_byte: u8, pn_length: usize, packet_number: u64 } {
         _ = packet_type;
-        if (self.tls_ctx == null) return error.NoTlsContext;
         if (packet_data.len < offset_to_first_byte + 5) return error.BufferTooShort;
 
-        // Derive header protection key from TLS context
-        const hp_key = try crypto.deriveHeaderProtectionKey(self.tls_ctx.?);
+        const hp_key = try crypto.deriveHeaderProtectionKey(self.tls_ctx);
         defer self.allocator.free(hp_key);
 
-        // Sample for AEAD mask (16 bytes, starting 4 bytes after packet number)
         const sample_offset = offset_to_pn + 4;
         if (packet_data.len < sample_offset + 16) return error.BufferTooShort;
         const sample = packet_data[sample_offset .. sample_offset + 16];
 
-        // Generate mask using AES or ChaCha20
         var mask: [5]u8 = undefined;
         try crypto.generateHeaderProtectionMask(hp_key, sample, &mask);
 
-        // Unmask first byte
         const first_byte = packet_data[offset_to_first_byte] ^ mask[0];
         const pn_length = @as(usize, (first_byte & 0x03) + 1);
 
-        // Unmask packet number
         var packet_number: u64 = 0;
         for (0..pn_length) |i| {
             packet_data[offset_to_pn + i] ^= mask[i + 1];
@@ -514,45 +543,36 @@ pub const Connection = struct {
         };
     }
 
-    /// Decrypt packet payload (RFC 9001, Section 5.3)
+    /// Decrypts packet payload per RFC 9001, Section 5.3.
     fn decryptPacketPayload(self: *Connection, packet_type: PacketType, packet_number: u64, encrypted_payload: []const u8) ![]u8 {
-        if (self.tls_ctx == null) return error.NoTlsContext;
-
-        // Derive packet protection key and IV
-        const pp_key = try crypto.derivePacketProtectionKey(self.tls_ctx.?, packet_type);
+        const pp_key = try crypto.derivePacketProtectionKey(self.tls_ctx, packet_type);
         defer self.allocator.free(pp_key);
-        const pp_iv = try crypto.derivePacketProtectionIv(self.tls_ctx.?, packet_type);
+        const pp_iv = try crypto.derivePacketProtectionIv(self.tls_ctx, packet_type);
         defer self.allocator.free(pp_iv);
 
-        // Construct nonce (IV XOR packet number)
         var nonce: [12]u8 = undefined;
         @memcpy(&nonce, pp_iv[0..12]);
         for (0..8) |i| {
             nonce[nonce.len - 1 - i] ^= @as(u8, @intCast((packet_number >> (i * 8)) & 0xFF));
         }
 
-        // Prepare associated data (header)
         const header_len = try self.getHeaderLength(packet_type, encrypted_payload);
         const associated_data = encrypted_payload[0..header_len];
 
-        // Perform AEAD decryption (AES-GCM or ChaCha20-Poly1305)
-        const decrypted = try crypto.decryptAead(
+        return try crypto.decryptAead(
             self.allocator,
             pp_key,
             nonce,
             encrypted_payload[header_len..],
             associated_data,
         );
-
-        return decrypted;
     }
 
-    /// Get header length for associated data (RFC 9001)
+    /// Calculates header length for associated data per RFC 9001.
     fn getHeaderLength(self: *Connection, packet_type: PacketType, packet_data: []const u8) !usize {
         var cursor: usize = 0;
         switch (packet_type) {
             .initial, .handshake, .zero_rtt => {
-                // Long header: first byte + version (4) + DCID len (1) + DCID + SCID len (1) + SCID + token (for Initial) + length
                 if (packet_data.len < 6) return error.BufferTooShort;
                 cursor += 1; // First byte
                 cursor += 4; // Version
@@ -566,7 +586,6 @@ pub const Connection = struct {
                 cursor += scid_len;
 
                 if (packet_type == .initial) {
-                    // Initial packets have a variable-length token
                     var vli_read_len: usize = 0;
                     const token_len = try parse_vli(packet_data[cursor..], &vli_read_len);
                     cursor += vli_read_len;
@@ -574,14 +593,12 @@ pub const Connection = struct {
                     cursor += @as(usize, token_len);
                 }
 
-                // Length field (variable-length integer, includes packet number + payload)
                 var vli_read_len: usize = 0;
                 _ = try parse_vli(packet_data[cursor..], &vli_read_len);
                 cursor += vli_read_len;
                 return cursor;
             },
             .retry => {
-                // Retry header: first byte + version (4) + DCID len (1) + DCID + SCID len (1) + SCID + Retry Token + Retry Integrity Tag (16 bytes)
                 if (packet_data.len < 6) return error.BufferTooShort;
                 cursor += 1; // First byte
                 cursor += 4; // Version
@@ -593,14 +610,12 @@ pub const Connection = struct {
                 cursor += 1;
                 if (packet_data.len < cursor + scid_len) return error.BufferTooShort;
                 cursor += scid_len;
-                // Retry Token length is implicit (until 16 bytes before end)
                 if (packet_data.len < cursor + 16) return error.BufferTooShort;
-                cursor = packet_data.len - 16; // Skip to before Retry Integrity Tag
-                cursor += 16; // Include Retry Integrity Tag
+                cursor = packet_data.len - 16;
+                cursor += 16;
                 return cursor;
             },
             .short_header => {
-                // Short header: first byte + DCID + packet number
                 if (packet_data.len < 2) return error.BufferTooShort;
                 const first_byte = packet_data[0];
                 const pn_length = @as(usize, (first_byte & 0x03) + 1);
@@ -612,18 +627,18 @@ pub const Connection = struct {
         }
     }
 
-    /// Queue handshake response
+    /// Queues TLS handshake response for clients.
     fn queueHandshakeResponse(self: *Connection) !void {
-        var pkt = try Packet.create(self.allocator, .handshake);
+        const pkt = try Packet.create(self.allocator, .handshake);
         errdefer {
             pkt.deinit();
             self.allocator.destroy(pkt);
         }
 
-        const crypto_data = try crypto.generateTlsHandshakeData(self.tls_ctx.?, self.allocator);
+        const crypto_data = try crypto.generateTlsHandshakeData(self.tls_ctx, self.allocator);
         defer self.allocator.free(crypto_data);
 
-        const frame = Frame{ .crypto = .{
+        const frame = packet.Frame{ .crypto = .{
             .offset = 0,
             .data = crypto_data,
         } };
@@ -631,7 +646,7 @@ pub const Connection = struct {
         try self.outgoing_packets.append(pkt);
     }
 
-    /// Simulate client streams
+    /// Simulates client-initiated streams for server.
     fn simulateClientStreams(self: *Connection) !void {
         try self.notifyNewStream(0, true); // Control stream
         try self.notifyNewStream(2, true); // Encoder stream
@@ -639,7 +654,7 @@ pub const Connection = struct {
         try self.notifyNewStream(4, false); // Request stream
     }
 
-    /// Notify about new stream
+    /// Notifies about a new stream.
     fn notifyNewStream(self: *Connection, stream_id: u64, is_unidirectional: bool) !void {
         const stream = try stream_mod.createStream(self.allocator, self, stream_id, is_unidirectional);
         try self.streams.put(stream_id, stream);
@@ -649,7 +664,7 @@ pub const Connection = struct {
         } }, self.user_ctx);
     }
 
-    /// Get next outgoing packet
+    /// Retrieves the next outgoing packet.
     pub fn getNextOutgoingPacket(self: *Connection) ?*Packet {
         if (self.outgoing_packets.items.len == 0) return null;
         const pkt = self.outgoing_packets.orderedRemove(0);
@@ -658,15 +673,15 @@ pub const Connection = struct {
         return pkt;
     }
 
-    /// Update timeout
+    /// Updates the idle timeout.
     fn updateTimeout(self: *Connection) void {
-        const idle_timeout_ns = self.max_idle_timeout_ms * std.time.ns_per_ms;
+        const idle_timeout_ns: i64 = @intCast(self.max_idle_timeout_ms * std.time.ns_per_ms);
         self.next_timeout = self.latest_activity_time + idle_timeout_ns;
     }
 
-    /// Process timeouts
+    /// Processes connection timeouts.
     pub fn processTimeouts(self: *Connection) !void {
-        const now = std.time.nanoTimestamp();
+        const now: i64 = @intCast(std.time.nanoTimestamp());
         const idle_timeout_ns = self.max_idle_timeout_ms * std.time.ns_per_ms;
         if (now - self.latest_activity_time > idle_timeout_ns) {
             try self.close(0, "Idle timeout");
@@ -674,28 +689,29 @@ pub const Connection = struct {
         self.updateTimeout();
     }
 
-    /// Close connection
+    /// Closes the connection with an error code and reason.
     pub fn close(self: *Connection, error_code: u64, reason: []const u8) !void {
         if (self.state == .closed or self.state == .draining) return;
-
         self.state = .closing;
 
-        // var pkt = try Packet.create(self.allocator, .connection_close);
-        // errdefer {
-        //     pkt.deinit();
-        //     self.allocator.destroy(pkt);
-        // }
+        const pkt = try Packet.create(self.allocator, .connection_close);
+        errdefer {
+            pkt.deinit();
+            self.allocator.destroy(pkt);
+        }
 
-        var buffer: [32]u8 = undefined;
+        var buffer = try self.allocator.alloc(u8, 32 + reason.len);
+        defer self.allocator.free(buffer);
         var cursor: usize = 0;
 
         cursor += try serialize_vli(error_code, buffer[cursor..]);
-        cursor += try serialize_vli(0x1c, buffer[cursor..]);
-        cursor += try serialize_vli(reason.len, buffer[cursor..]);
-        //try pkt.raw_data.appendSlice(buffer[0..cursor]);
-        //try pkt.raw_data.appendSlice(reason);
+        cursor += try serialize_vli(0x1c, buffer[cursor..]); // CONNECTION_CLOSE frame type
+        cursor += try serialize_vli(@as(u64, reason.len), buffer[cursor..]);
+        @memcpy(buffer[cursor .. cursor + reason.len], reason);
+        cursor += reason.len;
 
-        //try self.outgoing_packets.append(pkt);
+        try pkt.raw_data.appendSlice(buffer[0..cursor]);
+        try self.outgoing_packets.append(pkt);
 
         self.event_callback(self, .{ .connection_closed = .{
             .error_code = error_code,
@@ -704,45 +720,91 @@ pub const Connection = struct {
 
         self.state = .draining;
     }
+
+    /// Opens a new stream and returns its ID.
+    pub fn openStream(self: *Connection, is_unidirectional: bool) !u64 {
+        const stream_id = self.next_local_stream_id;
+        const stream_type_bit: u64 = if (is_unidirectional) 0x02 else 0x00;
+        const initiator_bit: u64 = if (self.role == .client) 0x00 else 0x01;
+        if (stream_id >= (if (is_unidirectional) self.initial_max_streams_uni else self.initial_max_streams_bidi) * 4) {
+            return error.StreamLimitExceeded;
+        }
+
+        const stream = try stream_mod.createStream(self.allocator, self, stream_id | stream_type_bit | initiator_bit, is_unidirectional);
+        try self.streams.put(stream_id, stream);
+        self.next_local_stream_id += 4; // Increment by 4 per QUIC stream ID rules
+
+        self.event_callback(self, .{ .new_stream = .{
+            .stream_id = stream_id,
+            .is_unidirectional = is_unidirectional,
+        } }, self.user_ctx);
+
+        return stream_id;
+    }
+
+    /// Sends data on a stream.
+    pub fn sendStreamData(self: *Connection, stream_id: u64, data: []const u8, is_fin: bool) !void {
+        if (self.streams.get(stream_id)) |stream| {
+            const pkt = try Packet.create(self.allocator, .short_header);
+            errdefer {
+                pkt.deinit();
+                self.allocator.destroy(pkt);
+            }
+
+            const frame = packet.Frame{ .stream = .{
+                .stream_id = stream_id,
+                .offset = stream.send_offset,
+                .length = @as(u64, data.len),
+                .fin = is_fin,
+                .data = data,
+            } };
+            try pkt.frames.append(frame);
+            try self.outgoing_packets.append(pkt);
+
+
+        } else {
+            return error.UnknownStream;
+        }
+    }
 };
 
-/// Create a new QUIC connection
+/// Creates a new QUIC connection.
 pub fn createConnection(allocator: Allocator, options: ConnectionOptions) !*Connection {
     return try Connection.init(allocator, options);
 }
 
-/// Destroy a QUIC connection
+/// Destroys a QUIC connection.
 pub fn destroyConnection(conn: *Connection) void {
     conn.deinit();
 }
 
-/// Start TLS handshake
+/// Starts the TLS handshake.
 pub fn startHandshake(conn: *Connection) !void {
     if (conn.state != .handshaking) return error.InvalidConnectionState;
     if (conn.role == .client) try conn.queueHandshakeResponse();
 }
 
-/// Receive UDP packet
+/// Receives a UDP packet.
 pub fn receivePacket(conn: *Connection, data: []const u8) !void {
     try conn.processPacket(data);
 }
 
-/// Get next timeout
+/// Gets the next timeout.
 pub fn getNextTimeout(conn: *Connection) ?i64 {
     return conn.next_timeout;
 }
 
-/// Process connection timeouts
+/// Processes connection timeouts.
 pub fn processTimeouts(conn: *Connection) !void {
     try conn.processTimeouts();
 }
 
-/// Get next outgoing packet
+/// Gets the next outgoing packet.
 pub fn getNextOutgoingPacket(conn: *Connection) ?*Packet {
     return conn.getNextOutgoingPacket();
 }
 
-/// Close connection with error
+/// Closes the connection with an error.
 pub fn closeConnection(conn: *Connection, error_code: u64, reason: []const u8) !void {
     try conn.close(error_code, reason);
 }

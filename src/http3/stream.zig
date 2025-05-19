@@ -1,548 +1,380 @@
-// src/http3/stream.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-// Import types from within the http3 module
 const types = @import("types.zig");
 const Frame = types.Frame;
 const FrameType = types.FrameType;
 const StreamType = types.StreamType;
+const Http3Error = types.Http3Error;
 
-const http3_error = @import("error.zig"); // Corrected import name
-const Http3Error = http3_error.Http3Error;
-const ErrorCode = http3_error.ErrorCode;
+const ErrorCode = @import("error.zig").ErrorCode;
 
-const settings = @import("settings.zig");
-const Settings = settings.Settings;
-
-// Import frame parsing/serialization functions
 const frame_utils = @import("frame.zig");
-const readFrame = frame_utils.readFrame; // Used internally
-const writeFrame = frame_utils.writeFrame; // Used internally
+const readFrame = frame_utils.readFrame;
+const writeFrame = frame_utils.writeFrame;
 
-// Import QPACK types
-const qpack = @import("qpack/mod.zig");
-const QpackEncoder = qpack.QpackEncoder;
-const QpackDecoder = qpack.QpackDecoder;
+const QpackEncoder = @import("qpack/encoder.zig").QpackEncoder;
+const QpackDecoder = @import("qpack/decoder.zig").QpackDecoder;
 
-// Forward declaration for connection struct to avoid circular dependency
-const QuicConnection = @import("connection.zig").QuicConnection;
+const Http3Connection = @import("connection.zig").Http3Connection;
+const Http3Handler = @import("handler.zig").Http3Handler;
 
-// Other necessary imports from core and http
 const Request = @import("../http/request.zig").Request;
 const Response = @import("../http/response.zig").Response;
-const Context = @import("../core/context.zig").Context;
-const HandlerFn = @import("../core/router.zig").HandlerFn;
-const NextFn = @import("../core/router.zig").NextFn;
-
-// Placeholder for the Http3Handler, needed to pass requests for processing
-const Http3Handler = @import("handler.zig").Http3Handler;
+const HeaderMap = @import("../http/header_map.zig").HeaderMap;
 
 const log = std.log.scoped(.http3_stream);
 
-/// Represents a single HTTP/3 stream within a QUIC connection.
-/// HTTP/3 streams are built on top of QUIC streams, providing
-/// ordered, reliable byte streams. HTTP/3 frames are sent over these.
-pub const QuicStream = struct {
+/// Represents an HTTP/3 stream over a QUIC stream.
+pub const Http3Stream = struct {
     allocator: Allocator,
-    /// A reference to the parent QUIC connection.
-    connection: *QuicConnection,
-    /// The underlying QUIC stream ID.
+    connection: *Http3Connection,
     stream_id: u64,
-    /// The type of HTTP/3 stream (control, push, encoder, decoder) or if it's a request/response stream.
-    /// Note: Request/response streams don't have an explicit type ID like control streams,
-    /// but it's useful to know if it's a bidirectional stream used for requests/responses.
-    /// Maybe this field indicates if it's a special stream type or a standard bidirectional stream.
-    stream_type: ?StreamType, // Null for standard request/response streams? Or maybe a different enum?
-
-    /// Current state of the HTTP/3 stream processing (e.g., waiting for HEADERS, receiving DATA).
+    stream_type: ?StreamType,
     state: State,
-
-    /// Buffer for incoming data that hasn't been fully processed into HTTP/3 frames yet.
     read_buffer: std.ArrayList(u8),
-
-    /// State for parsing incoming HTTP/3 frames and messages.
-    /// This would track the state of reading frame headers, payloads,
-    /// and assembling a complete HTTP request.
+    body_buffer: std.ArrayList(u8),
     parser_state: ParserState,
-
-    /// Placeholder for the incoming HTTP request being parsed.
-    /// This is populated once HEADERS and potentially initial DATA frames are received.
     request: ?Request,
-
-    /// Placeholder for the outgoing HTTP response to be serialized and sent.
-    /// This is set by the Http3Handler after the application handler completes.
     response: ?Response,
 
     pub const State = enum {
-        /// Stream is newly created, no data exchanged yet.
         idle,
-        /// Stream is open and actively processing data.
-        open, // Can be in read or write states
-        /// Stream is receiving data and parsing frames (HEADERS, DATA, etc.).
+        open,
         receiving,
-        /// A complete request has been received and is being processed by the handler.
         processing,
-        /// Sending response data.
         sending,
-        /// Local side has sent FIN or equivalent, waiting for peer FIN.
         half_closed_local,
-        /// Remote side has sent FIN or equivalent, waiting for local FIN.
         half_closed_remote,
-        /// Both sides have closed the stream.
         closed,
-        /// Error occurred on this stream.
         errored,
     };
 
-    // State machine for parsing incoming data into frames and then into a request
     pub const ParserState = enum {
-        /// Waiting for the start of a new frame (reading type and length).
         waiting_for_frame_header,
-        /// Reading the payload of the current frame.
         reading_frame_payload,
-        /// Waiting for the full HEADERS frame to parse the request line and headers.
         waiting_for_headers,
-        /// Reading DATA frames for the request body.
         reading_body,
-        /// Parsing complete, ready to dispatch the request.
         request_complete,
     };
 
-    pub fn init(allocator: Allocator, connection: *QuicConnection, stream_id: u64, stream_type: ?StreamType) !*QuicStream {
-        const self = try allocator.create(QuicStream);
+    pub fn init(connection: *Http3Connection, stream_id: u64, stream_type: ?StreamType) !*Http3Stream {
+        const self = try connection.allocator.create(Http3Stream);
         self.* = .{
-            .allocator = allocator,
+            .allocator = connection.allocator,
             .connection = connection,
             .stream_id = stream_id,
             .stream_type = stream_type,
             .state = .idle,
-            .read_buffer = std.ArrayList(u8).init(allocator),
-            .parser_state = .waiting_for_frame_header,
+            .read_buffer = std.ArrayList(u8).init(connection.allocator),
+            .body_buffer = std.ArrayList(u8).init(connection.allocator),
+            .parser_state = if (stream_type == null) .waiting_for_headers else .waiting_for_frame_header,
             .request = null,
             .response = null,
         };
-
-        log.debug("Initialized HTTP/3 stream {d} (Type: {}, QUIC ID: {})", .{ stream_id, stream_type, stream_id });
-
-        // For standard bidirectional streams, the first frame is expected to be HEADERS.
-        // For control streams, the first frame is typically SETTINGS.
-        // This initial state management needs to be refined based on stream_type.
-        if (stream_type == null) {
-            self.parser_state = .waiting_for_headers; // Expect HEADERS first on a request stream
-        } else if (stream_type == .control) {
-            // Control stream might expect SETTINGS first
-            self.parser_state = .waiting_for_frame_header; // Or a more specific control frame state
-        }
-
+        log.debug("Initialized stream {d} (type: {?})", .{ stream_id, stream_type });
         return self;
     }
 
-    pub fn deinit(self: *QuicStream) void {
-        log.debug("Deinitializing HTTP/3 stream {d}", .{self.stream_id});
+    pub fn deinit(self: *Http3Stream) void {
+        log.debug("Deinitializing stream {d}", .{self.stream_id});
         self.read_buffer.deinit();
+        self.body_buffer.deinit();
         if (self.request) |*req| req.deinit();
         if (self.response) |*res| res.deinit();
-        // TODO: Clean up any other allocated resources specific to this stream.
-        self.allocator.destroy(self); // Free the struct itself
+        self.allocator.destroy(self);
     }
 
-    /// Handles incoming raw data from the underlying QUIC stream.
-    /// This data needs to be buffered and then parsed into HTTP/3 frames.
-    /// This function is called by the QuicConnection when data arrives for this stream.
-    pub fn handleReadData(self: *QuicStream, data: []const u8, is_fin: bool) anyerror!void {
-        log.debug("Stream {d}: handleReadData({d} bytes, fin: {}) in state {}, parser state {}", .{ self.stream_id, data.len, is_fin, @tagName(self.state), @tagName(self.parser_state) });
-
-        // Append incoming data to the buffer
+    pub fn handleReadData(self: *Http3Stream, data: []const u8, is_fin: bool) !void {
+        log.debug("Stream {d}: Handling {d} bytes (fin: {})", .{ self.stream_id, data.len, is_fin });
         try self.read_buffer.appendSlice(data);
+        self.state = .receiving;
 
-        // Attempt to parse frames from the buffer
-        var reader = std.io.Buffer.init(self.read_buffer.items).reader();
+        while (self.read_buffer.items.len > 0) {
+            const reader = std.io.fixedBufferStream(self.read_buffer.items).reader();
+            if (self.parser_state == .waiting_for_frame_header and self.read_buffer.items.len < 2) break;
 
-        while (true) {
-            // Need to make sure we have enough data for a frame header (type + length)
-            // Variable length integers can be up to 8 bytes each.
-            // Minimum frame header size is 2 bytes (1-byte type, 1-byte length=0).
-            // So we need at least 2 bytes to even attempt reading a frame header.
-            if (reader.bytesLeft() < 2) break; // Need more data for the next potential header
+            const frame_result = readFrame(self.allocator, reader);
+            const consumed = reader.pos;
 
-            // Try to read the next frame
-            const frame_result = readFrame(self.allocator, &reader);
             switch (frame_result) {
-                .{} => |parsed_frame| {
-                    // Successfully parsed a frame
-                    try self.handleFrame(parsed_frame); // Process the frame
-                    parsed_frame.deinit(self.allocator); // Deinit frame if it allocated payload
-                    // Keep parsing if more data is in the buffer
-                    self.parser_state = .waiting_for_frame_header; // Reset state for next frame read attempt
+                .ok => |frame| {
+                    try self.handleFrame(frame);
+                    frame.deinit(self.allocator);
+                    self.parser_state = .waiting_for_frame_header;
+                    if (self.parser_state == .request_complete) {
+                        try self.dispatchRequestToHandler();
+                        break;
+                    }
                 },
-                http3_error.NeedMoreData => { // Corrected error reference
-                    // Not enough data for a full frame yet.
-                    // Keep the remaining data in the buffer and wait for more.
-                    self.parser_state = .reading_frame_payload; // Indicate we are reading a frame payload
-                    break; // Exit parsing loop
-                },
-                else => |err| {
-                    // Error parsing frame
-                    log.err("Stream {d}: Failed to parse frame: {}", .{ self.stream_id, err });
-                    // According to spec, frame parsing errors are connection errors
-                    try self.connection.asyncClose(.frame_error);
-                    return err; // Propagate error
-                },
-            }
-            // After parsing a frame, we should check if we reached a state to dispatch the request
-            if (self.parser_state == .request_complete) {
-                try self.dispatchRequestToHandler();
-                // After dispatching, we might transition to a new state (e.g., sending response)
-                // and stop parsing incoming frames for the request body.
-                // Additional incoming frames might be trailers or unexpected, handle based on state.
-                break; // Exit parsing loop after dispatch
-            }
-        }
-
-        // Update the read buffer to remove consumed bytes
-        const bytes_consumed = reader.pos; // How many bytes the reader advanced
-        if (bytes_consumed > 0) {
-            // Create a new ArrayList with remaining data and replace the old one
-            var remaining_data = try std.ArrayList(u8).initCapacity(self.allocator, self.read_buffer.items.len - bytes_consumed);
-            try remaining_data.appendSlice(self.read_buffer.items[bytes_consumed..]);
-            self.read_buffer.deinit(); // Deinit the old buffer
-            self.read_buffer = remaining_data; // Replace with the new buffer
-        }
-
-        // Handle FIN bit from QUIC layer
-        if (is_fin) {
-            log.debug("Stream {d}: Received FIN", .{self.stream_id});
-            self.state = .half_closed_remote;
-            // TODO: Check if receiving side is now fully closed and notify handler/connection.
-            // If this was the end of the request body, and we were waiting for it,
-            // the request is now complete.
-            if (self.parser_state == .reading_body) {
-                self.parser_state = .request_complete;
-                try self.dispatchRequestToHandler(); // Dispatch if not already
-            } else if (self.parser_state != .request_complete) {
-                // FIN received unexpectedly before request was fully parsed.
-                log.err("Stream {d}: Received FIN unexpectedly in parser state {}", .{ self.stream_id, @tagName(self.parser_state) });
-                try self.connection.asyncClose(.stream_creation_error); // Or other relevant error
-                return Http3Error.ProtocolError;
-            }
-        }
-    }
-
-    /// Processes a fully parsed HTTP/3 frame received on this stream.
-    /// This is where the HTTP/3 protocol logic per stream would go.
-    fn handleFrame(self: *QuicStream, frame: Frame) anyerror!void {
-        log.debug("Stream {d}: handleFrame({s}) in parser state {}, stream type {}", .{ self.stream_id, @tagName(frame), @tagName(self.parser_state), self.stream_type });
-
-        // Logic depends on stream type and current parser state
-        switch (self.stream_type) {
-            .control => {
-                // Handle frames specific to the control stream
-                switch (frame) {
-                    .settings => {
-                        log.debug("Stream {d} (Control): Processing SETTINGS frame", .{self.stream_id});
-                        // TODO: Parse and apply settings to the connection or server
-                        return http3_error.Unimplemented; // Placeholder
-                    },
-                    .goaway => {
-                        log.info("Stream {d} (Control): Received GOAWAY frame, stream ID {}", .{ self.stream_id, frame.goaway.stream_id });
-                        // TODO: Handle GOAWAY frame
-                        return http3_error.Unimplemented; // Placeholder
-                    },
-                    .max_push_id => {
-                        log.debug("Stream {d} (Control): Received MAX_PUSH_ID frame with push ID {}", .{ self.stream_id, frame.max_push_id.push_id });
-                        // TODO: Update max Push ID
-                        return http3_error.Unimplemented; // Placeholder
+                .err => |err| switch (err) {
+                    Http3Error.NeedMoreData => {
+                        self.parser_state = .reading_frame_payload;
+                        break;
                     },
                     else => {
-                        log.err("Stream {d}: Received unexpected frame type {s} on control stream", .{ self.stream_id, @tagName(frame) });
+                        log.err("Stream {d}: Frame parse error: {}", .{ self.stream_id, err });
+                        try self.connection.asyncClose(.frame_error);
+                        return err;
+                    },
+                },
+            }
+
+            self.read_buffer.shrinkAndFree(self.read_buffer.items.len - consumed);
+            if (consumed > 0 and self.read_buffer.items.len > 0) {
+                std.mem.copyForwards(u8, self.read_buffer.items, self.read_buffer.items[consumed..]);
+            }
+        }
+
+        if (is_fin) {
+            self.state = .half_closed_remote;
+            switch (self.parser_state) {
+                .waiting_for_headers, .waiting_for_frame_header, .reading_frame_payload => {
+                    log.err("Stream {d}: FIN received in invalid state {}", .{ self.stream_id, self.parser_state });
+                    try self.connection.asyncClose(.protocol_error);
+                    return Http3Error.ProtocolError;
+                },
+                .reading_body => {
+                    self.parser_state = .request_complete;
+                    try self.dispatchRequestToHandler();
+                },
+                .request_complete => {},
+            }
+            if (self.state == .half_closed_local) self.state = .closed;
+        }
+    }
+
+    fn methodExpectsBody(method: []const u8) bool {
+        return std.mem.eql(u8, method, "POST") or std.mem.eql(u8, method, "PUT") or std.mem.eql(u8, method, "PATCH");
+    }
+
+    fn handleFrame(self: *Http3Stream, frame: Frame) !void {
+        log.debug("Stream {d}: Handling frame {} (type: {?})", .{ self.stream_id, frame, self.stream_type });
+
+        switch (self.stream_type) {
+            .control => switch (frame) {
+                .settings => {
+                    log.debug("Stream {d}: Processing SETTINGS", .{self.stream_id});
+                    // Assume connection applies settings
+                    self.connection.settings = frame.settings;
+                },
+                .goaway => {
+                    log.info("Stream {d}: GOAWAY (stream_id: {d})", .{ self.stream_id, frame.goaway.stream_id });
+                    try self.connection.asyncClose(.no_error);
+                },
+                .max_push_id => {
+                    log.debug("Stream {d}: MAX_PUSH_ID (id: {d})", .{ self.stream_id, frame.max_push_id.push_id });
+                    // Update connection push ID limit
+                },
+                else => {
+                    log.err("Stream {d}: Unexpected frame {} on control stream", .{ self.stream_id, frame });
+                    try self.connection.asyncClose(.frame_unexpected);
+                    return Http3Error.FrameUnexpected;
+                },
+            },
+            .push => {
+                log.err("Stream {d}: Push streams not supported", .{self.stream_id});
+                try self.connection.asyncClose(.protocol_error);
+                return Http3Error.ProtocolError;
+            },
+            .encoder => switch (frame) {
+                .data => if (self.connection.qpack_decoder) |decoder| {
+                    try decoder.processInstructions(frame.data.payload);
+                } else {
+                    log.err("Stream {d}: No QPACK decoder", .{self.stream_id});
+                    try self.connection.asyncClose(.internal_error);
+                    return Http3Error.FrameError;
+                },
+                .padding, .ping => {},
+                .reserved => {},
+                else => {
+                    log.err("Stream {d}: Unexpected frame {} on encoder stream", .{ self.stream_id, frame });
+                    try self.connection.asyncClose(.frame_unexpected);
+                    return Http3Error.FrameUnexpected;
+                },
+            },
+            .decoder => switch (frame) {
+                .data => if (self.connection.qpack_encoder) |encoder| {
+                    try encoder.processInstructions(frame.data.payload);
+                } else {
+                    log.err("Stream {d}: No QPACK encoder", .{self.stream_id});
+                    try self.connection.asyncClose(.internal_error);
+                    return Http3Error.FrameError;
+                },
+                .padding, .ping => {},
+                .reserved => {},
+                else => {
+                    log.err("Stream {d}: Unexpected frame {} on decoder stream", .{ self.stream_id, frame });
+                    try self.connection.asyncClose(.frame_unexpected);
+                    return Http3Error.FrameUnexpected;
+                },
+            },
+            null => switch (self.parser_state) {
+                .waiting_for_headers => switch (frame) {
+                    .headers => {
+                        const decoder = self.connection.qpack_decoder orelse {
+                            log.err("Stream {d}: No QPACK decoder", .{self.stream_id});
+                            try self.connection.asyncClose(.internal_error);
+                            return Http3Error.FrameError;
+                        };
+                        const headers = try decoder.decodeHeaders(self.stream_id, frame.headers.encoded_block);
+                        defer headers.deinit();
+
+                        self.request = try Request.init(self.allocator);
+                        var method: ?[]const u8 = null;
+                        var it = headers.iterator();
+                        while (it.next()) |entry| {
+                            if (std.mem.eql(u8, entry.key_ptr.*, ":method")) {
+                                try self.request.?.setMethod(entry.value_ptr.*);
+                                method = entry.value_ptr.*;
+                            } else if (std.mem.eql(u8, entry.key_ptr.*, ":path")) {
+                                try self.request.?.setPath(entry.value_ptr.*);
+                            } else {
+                                try self.request.?.addHeader(entry.key_ptr.*, entry.value_ptr.*);
+                            }
+                        }
+
+                        self.parser_state = if (method != null and methodExpectsBody(method.?)) .reading_body else .request_complete;
+                    },
+                    .data, .settings, .goaway, .max_push_id, .cancel_push, .webtransport_stream => {
+                        log.err("Stream {d}: Unexpected frame {} before HEADERS", .{ self.stream_id, frame });
                         try self.connection.asyncClose(.frame_unexpected);
                         return Http3Error.FrameUnexpected;
                     },
-                }
-            },
-            .push => {
-                log.warn("Push stream handling unimplemented for stream {}", .{self.stream_id});
-                try self.connection.asyncClose(.unimplemented);
-                return http3_error.Unimplemented; // Placeholder
-            },
-            .encoder => {
-                log.debug("Stream {d}: Handling QPACK encoder stream data", .{self.stream_id});
-                if (self.connection.qpack_encoder) |encoder| {
-                    try encoder.handleDecoderStream(frame.data.payload);
-                } else {
-                    log.err("Stream {d}: Received encoder stream data but no QPACK encoder!", .{self.stream_id});
-                    try self.connection.asyncClose(.protocol_error);
-                    return Http3Error.ProtocolError;
-                }
-                return;
-            },
-            .decoder => {
-                log.debug("Stream {d}: Handling QPACK decoder stream data", .{self.stream_id});
-                if (self.connection.qpack_decoder) |decoder| {
-                    try decoder.handleDecoderStreamData(frame.data.payload);
-                } else {
-                    log.err("Stream {d}: Received decoder stream data but no QPACK decoder!", .{self.stream_id});
-                    try self.connection.asyncClose(.protocol_error);
-                    return Http3Error.ProtocolError;
-                }
-                return;
-            },
-            null => {
-                switch (self.parser_state) {
-                    .waiting_for_headers => {
-                        switch (frame) {
-                            .headers => {
-                                log.debug("Stream {d}: Processing initial HEADERS frame", .{self.stream_id});
-                                if (self.connection.qpack_decoder) |decoder| {
-                                    const headers = try decoder.decodeHeaders(frame.headers.encoded_block);
-                                    _ = headers;
-                                    // TODO: Create Request object
-                                    self.parser_state = .request_complete; // Simplified
-                                    log.info("Stream {d}: Request HEADERS received, ready to process (simplified)", .{self.stream_id});
-                                } else {
-                                    log.err("Stream {d}: Received HEADERS frame but no QPACK decoder!", .{self.stream_id});
-                                    try self.connection.asyncClose(.protocol_error);
-                                    return Http3Error.ProtocolError;
-                                }
-                                return http3_error.Unimplemented; // Placeholder
-                            },
-                            .settings, .goaway, .max_push_id, .cancel_push, .duplicate_push => {
-                                log.err("Stream {d}: Received unexpected frame type {s} before HEADERS frame", .{ self.stream_id, @tagName(frame) });
-                                try self.connection.asyncClose(.frame_unexpected);
-                                return Http3Error.FrameUnexpected;
-                            },
-                            .data => {
-                                log.err("Stream {d}: Received DATA frame before HEADERS frame", .{self.stream_id});
-                                try self.connection.asyncClose(.frame_unexpected);
-                                return Http3Error.FrameUnexpected;
-                            },
-                            .reserved => {
-                                log.debug("Stream {d}: Ignoring reserved frame while waiting for headers", .{self.stream_id});
-                                return;
-                            },
-                            else => {
-                                log.err("Stream {d}: Received unknown frame type {s} to start stream", .{ self.stream_id, @tagName(frame) });
-                                try self.connection.asyncClose(.frame_unexpected);
-                                return Http3Error.FrameUnexpected;
-                            },
-                        }
+                    .padding, .ping, .reserved => {},
+                },
+                .reading_body => switch (frame) {
+                    .data => {
+                        try self.body_buffer.appendSlice(frame.data.payload);
+                        if (self.request != null) self.request.?.body = self.body_buffer.items;
                     },
-                    .reading_body => {
-                        switch (frame) {
-                            .data => {
-                                log.debug("Stream {d}: Processing DATA frame, payload len: {d}", .{ self.stream_id, frame.data.payload.len });
-                                // TODO: Append to request body
-                                return http3_error.Unimplemented; // Placeholder
-                            },
-                            .headers => {
-                                log.debug("Stream {d}: Processing trailer HEADERS frame", .{self.stream_id});
-                                self.parser_state = .request_complete;
-                                log.info("Stream {d}: Trailer HEADERS received, request complete", .{self.stream_id});
-                                return http3_error.Unimplemented; // Placeholder
-                            },
-                            .reserved => {
-                                log.debug("Stream {d}: Ignoring reserved frame while reading body", .{self.stream_id});
-                                return;
-                            },
-                            else => {
-                                log.err("Stream {d}: Received unexpected frame type {s} while reading body", .{ self.stream_id, @tagName(frame) });
-                                try self.connection.asyncClose(.frame_unexpected);
-                                return Http3Error.FrameUnexpected;
-                            },
+                    .headers => {
+                        const decoder = self.connection.qpack_decoder orelse {
+                            log.err("Stream {d}: No QPACK decoder", .{self.stream_id});
+                            try self.connection.asyncClose(.internal_error);
+                            return Http3Error.FrameError;
+                        };
+                        const trailers = try decoder.decodeHeaders(frame.headers.encoded_block);
+                        defer trailers.deinit();
+
+                        var it = trailers.iterator();
+                        while (it.next()) |entry| {
+                            try self.request.?.addHeader(entry.key_ptr.*, entry.value_ptr.*);
                         }
+                        self.parser_state = .request_complete;
                     },
-                    .request_complete => {
-                        switch (frame) {
-                            .data, .headers => {
-                                log.err("Stream {d}: Received DATA or HEADERS frame after request complete", .{self.stream_id});
-                                try self.connection.asyncClose(.frame_unexpected);
-                                return Http3Error.FrameUnexpected;
-                            },
-                            .reserved => {
-                                log.debug("Stream {d}: Ignoring reserved frame after request complete", .{self.stream_id});
-                                return;
-                            },
-                            else => {
-                                log.warn("Stream {d}: Received unexpected frame type {s} after request complete, ignoring", .{ self.stream_id, @tagName(frame) });
-                                return;
-                            },
-                        }
-                    },
+                    .padding, .ping, .reserved => {},
                     else => {
-                        log.warn("Stream {d}: Received frame {s} in unexpected parser state {s}, ignoring", .{ self.stream_id, @tagName(frame), @tagName(self.parser_state) });
-                        return;
+                        log.err("Stream {d}: Unexpected frame {} while reading body", .{ self.stream_id, frame });
+                        try self.connection.asyncClose(.frame_unexpected);
+                        return Http3Error.FrameUnexpected;
                     },
-                }
-            },
-            else => {
-                log.warn("Stream {d}: Received frame {s} on unhandled stream type {s}", .{ self.stream_id, @tagName(frame), self.stream_type });
-                return http3_error.Unimplemented; // Placeholder
+                },
+                .request_complete => switch (frame) {
+                    .padding, .ping, .reserved => {},
+                    else => {
+                        log.err("Stream {d}: Unexpected frame {} after request complete", .{ self.stream_id, frame });
+                        try self.connection.asyncClose(.frame_unexpected);
+                        return Http3Error.FrameUnexpected;
+                    },
+                },
+                .waiting_for_frame_header, .reading_frame_payload => {
+                    log.err("Stream {d}: Invalid parser state {}", .{ self.stream_id, self.parser_state });
+                    try self.connection.asyncClose(.internal_error);
+                    return Http3Error.FrameError;
+                },
             },
         }
     }
 
-    /// Dispatches the complete HTTP/3 request to the Http3Handler.
-    /// This is called after the request (headers and body) is fully parsed.
-    fn dispatchRequestToHandler(self: *QuicStream) anyerror!void {
-        // Ensure the request is actually complete and available
+    fn dispatchRequestToHandler(self: *Http3Stream) !void {
         if (self.parser_state != .request_complete or self.request == null) {
-            log.err("Stream {d}: Attempted to dispatch incomplete request!", .{self.stream_id});
+            log.err("Stream {d}: Invalid dispatch state", .{self.stream_id});
             try self.connection.asyncClose(.internal_error);
-            return Http3Error.InternalError; // Or Http3Error.InvalidStreamState
+            return Http3Error.FrameError;
         }
-
-        log.debug("Stream {d}: Dispatching request to handler", .{self.stream_id});
-
-        // TODO: Get the Http3Handler instance (likely owned by the server or connection)
-        // and call its processRequest method.
-        // The processRequest method will run middleware and the route handler.
-        // It will modify self.response.
-
-        // Placeholder call (requires Http3Handler instance and proper Request object):
-        // Assume Http3Handler is stored somewhere accessible, e.g., in the Server struct
-        // var handler = self.connection.server.http3_handler; // Example access
-        // try handler.processRequest(self, self.request.?); // Assuming self.request is populated and valid
-
-        // After the handler call completes, the response should be populated in self.response.
-        // Transition state to sending and begin sending the response.
-        self.state = .processing; // Indicate handler is working
-
-        // TODO: After the handler finishes (need async/await or task completion):
-        // self.state = .sending; // Transition state
-        // try self.sendResponse(self.response.?); // Send the response
-
-        // Since the handler runs asynchronously, this function might just schedule the handler task
-        // and return, or it might await the handler completion.
-        // For now, it's a placeholder for the coordination logic.
-        return http3_error.Unimplemented; // Placeholder
+        self.state = .processing;
+        if (self.connection.server.http3_handler) |handler| {
+            try handler.handleNewStream(self);
+        } else {
+            log.err("Stream {d}: No handler available", .{self.stream_id});
+            try self.connection.asyncClose(.internal_error);
+            return Http3Error.FrameError;
+        }
     }
 
-    /// Sends raw data on the underlying QUIC stream.
-    /// This data is typically HTTP/3 frames or parts of them.
-    pub fn writeData(self: *QuicStream, data: []const u8) anyerror!void {
+    pub fn writeData(self: *Http3Stream, data: []const u8) !void {
         if (self.state == .closed or self.state == .errored or self.state == .half_closed_local) {
-            log.warn("Stream {d}: Attempted to write data in state {}", .{ self.stream_id, @tagName(self.state) });
-            return Http3Error.InvalidStreamState; // Cannot write in this state
+            log.warn("Stream {d}: Invalid write state {}", .{ self.stream_id, self.state });
+            return Http3Error.FrameError;
         }
-        log.debug("Stream {d}: writeData({d} bytes)", .{ self.stream_id, data.len });
-        // TODO: Pass this data to the underlying QUIC connection to be sent.
-        // The connection will handle QUIC stream framing and sending over UDP.
-        // Note: `sendStreamData` in connection.zig currently returns error.Unimplemented.
-        return self.connection.sendStreamData(self.stream_id, data, false); // is_fin=false for chunks
+        try self.connection.sendStreamData(self.stream_id, data, false);
     }
 
-    /// Sends the final chunk of data and signals the end of the stream from this side.
-    pub fn writeDataAndEnd(self: *QuicStream, data: []const u8) anyerror!void {
+    pub fn writeDataAndEnd(self: *Http3Stream, data: []const u8) !void {
         if (self.state == .closed or self.state == .errored or self.state == .half_closed_local) {
-            log.warn("Stream {d}: Attempted to write data and end in state {}", .{ self.stream_id, @tagName(self.state) });
-            return Http3Error.InvalidStreamState; // Cannot write in this state
+            log.warn("Stream {d}: Invalid write state {}", .{self.state});
+            return Http3Error.FrameError;
         }
-        log.debug("Stream {d}: writeDataAndEnd({d} bytes)", .{ self.stream_id, data.len });
-        // TODO: Pass this data to the underlying QUIC connection to be sent with the FIN flag.
-        // The connection will handle QUIC stream framing and sending over UDP.
-        return self.connection.sendStreamData(self.stream_id, data, true); // is_fin=true
+        try self.connection.sendStreamData(self.stream_id, data, true);
+        self.state = .half_closed_local;
     }
 
-    /// Called by the Http3Handler to send an HTTP Response on this stream.
-    /// This is the entry point from the application logic back to the HTTP/3 framing layer.
-    pub fn sendResponse(self: *QuicStream, response: *Response) anyerror!void {
+    pub fn sendResponse(self: *Http3Stream, response: *Response) !void {
         if (self.state == .closed or self.state == .errored or self.state == .half_closed_local) {
-            log.warn("Stream {d}: Attempted to send response in state {}", .{ self.stream_id, @tagName(self.state) });
-            return Http3Error.InvalidStreamState; // Cannot send response in this state
+            log.warn("Stream {d}: Invalid state {}", .{ self.stream_id, self.state });
+            return Http3Error.FrameError;
+        }
+        self.response = response;
+        self.state = .sending;
+
+        var buf = std.ArrayList(u8).init(self.allocator);
+        defer buf.deinit();
+
+        const encoder = self.connection.qpack_encoder orelse {
+            log.err("Stream {d}: No QPACK encoder", .{self.stream_id});
+            try self.connection.asyncClose(.internal_error);
+            return Http3Error.FrameError;
+        };
+
+        var header_map = HeaderMap.init(self.allocator);
+        defer header_map.deinit();
+        try header_map.put(":status", try std.fmt.allocPrint(self.allocator, "{d}", .{response.status_code}));
+        var it = response.headers.iterator();
+        while (it.next()) |entry| {
+            try header_map.put(entry.key_ptr.*, entry.value_ptr.*);
         }
 
-        log.debug("Stream {d}: sendResponse", .{self.stream_id});
-        self.response = response; // Store the response object
+        const encoded = try encoder.encodeHeaders(header_map);
+        defer self.allocator.free(encoded);
+        try writeFrame(self.allocator, buf.writer(), .{ .headers = .{ .encoded_block = encoded } });
 
-        // TODO: Serialize the Response struct into HTTP/3 frames (HEADERS, DATA, etc.)
-        // This will involve:
-        // 1. Creating HEADERS frame payload using QPACK encoder (from self.connection.qpack_encoder).
-        // 2. Writing the HEADERS frame using `frame.writeFrame` to a buffer.
-        // 3. Writing DATA frames for the response body using `frame.writeFrame` to a buffer.
-        // 4. Writing trailer HEADERS frames if any.
-        // 5. Signaling the end of the stream (FIN) after the last frame.
+        if (response.body.len > 0) {
+            try writeFrame(self.allocator, buf.writer(), .{ .data = .{ .payload = response.body } });
+        }
 
-        // Use a buffer or writer to serialize frames
-        var response_buffer = std.ArrayList(u8).init(self.allocator);
-        const writer = response_buffer.writer();
-        _ = writer;
-
-        // Example flow for serializing HEADERS and DATA
-        // try writer.writeAll(try frame.serializeFrame(self.allocator, headers_frame)); // Serialize and write HEADERS frame bytes
-
-        // For response body:
-        // var body_reader = response.body.reader();
-        // var body_chunk_buffer = try self.allocator.alloc(u8, 4096); // Example chunk size
-        // defer self.allocator.free(body_chunk_buffer);
-        // while (true) {
-        //      var bytes_read = try body_reader.read(body_chunk_buffer);
-        //      if (bytes_read == 0) break; // End of body
-        //
-        //      var data_frame = Frame{ .type = .data, .data = .{ .payload = body_chunk_buffer[0..bytes_read] } };
-        //      try writer.writeAll(try frame.serializeFrame(self.allocator, data_frame)); // Serialize and write DATA frame bytes
-        // }
-
-        // TODO: After serializing frames to the buffer, write the buffer content to the QUIC stream.
-        // try self.writeDataAndEnd(response_buffer.items); // Send all buffered data with FIN
-
-        response_buffer.deinit(); // Clean up serialization buffer
-
-        self.state = .sending; // Update state
-
-        return http3_error.Unimplemented; // Placeholder
+        try self.writeDataAndEnd(buf.items);
     }
 
-    /// Initiate a graceful closure of the stream from the local side (sending FIN).
-    /// Called when the local side has finished sending data.
-    pub fn closeWrite(self: *QuicStream) anyerror!void {
+    pub fn closeWrite(self: *Http3Stream) !void {
         if (self.state == .closed or self.state == .errored or self.state == .half_closed_local) {
-            log.warn("Stream {d}: Attempted to close write side in state {}", .{ self.stream_id, @tagName(self.state) });
-            return Http3Error.InvalidStreamState; // Cannot close write in this state
+            log.warn("Stream {d}: Invalid state {}", .{ self.stream_id, self.state });
+            return Http3Error.FrameError;
         }
-        log.debug("Stream {d}: closing write side", .{self.stream_id});
-        // TODO: Signal the underlying QUIC stream to close the write side.
-        // This typically involves sending a stream frame with the FIN bit set.
-        try self.connection.sendStreamData(self.stream_id, &.{}, true); // Send FIN with no data
-        self.state = .half_closed_local; // Update state
-
-        // TODO: Check if both sides are now closed and initiate full stream deinitialization.
-        // If self.state is .half_closed_remote, and we just set it to .half_closed_local,
-        // then both sides are closed. Trigger deinit.
-        // if (self.state == .half_closed_remote) { self.connection.closeStream(self.stream_id); } // Example
-
-        return http3_error.Unimplemented; // Placeholder, remove once implemented
+        try self.connection.sendStreamData(self.stream_id, &.{}, true);
+        self.state = .half_closed_local;
+        if (self.state == .half_closed_remote) self.state = .closed;
     }
 
-    /// A peer initiated a graceful closure of the stream by sending a STOP_SENDING frame.
-    /// Called by the QuicConnection when a STOP_SENDING frame is received for this stream.
-    pub fn handleStopSending(self: *QuicStream, error_code: u64) anyerror!void {
-        log.debug("Stream {d}: received STOP_SENDING with code {}", .{ self.stream_id, error_code });
-        // TODO: Handle STOP_SENDING frame from peer.
-        // This typically means the peer is no longer interested in receiving data on this stream.
-        // You should stop sending data and close the write side if not already.
+    pub fn handleStopSending(self: *Http3Stream, error_code: u64) !void {
+        log.debug("Stream {d}: STOP_SENDING (code: {d})", .{ self.stream_id, error_code });
         try self.closeWrite();
-        self.state = .half_closed_remote; // Update state if not already
-        // TODO: Signal handler/application that sending is stopped.
-        return; // Success
+        self.state = .half_closed_remote;
     }
 
-    /// A peer wishes to reset this stream, potentially due to an error.
-    /// Called by the QuicConnection when a RESET_STREAM frame is received for this stream.
-    pub fn handleResetStream(self: *QuicStream, error_code: u64) anyerror!void {
-        log.info("Stream {d}: received RESET_STREAM with code {}", .{ self.stream_id, error_code });
-        // TODO: Handle RESET_STREAM frame from peer.
-        // This indicates a terminal error on the stream.
-        // You should cease all activity on this stream and transition to a closed or errored state.
-        self.state = .errored; // Update state
-        // TODO: Signal the connection to clean up the stream resources immediately.
-        // self.connection.closeStream(self.stream_id); // Example call to connection
-        return; // Success
+    pub fn handleResetStream(self: *Http3Stream, error_code: u64) !void {
+        log.info("Stream {d}: RESET_STREAM (code: {d})", .{ self.stream_id, error_code });
+        self.state = .errored;
+        try self.connection.asyncClose(.no_error);
     }
-
-    // TODO: Add other stream-specific logic:
-    // - Managing request body buffering
-    // - State for parsing different parts of the HTTP/3 message
-    // - State for serializing different parts of the HTTP/3 message
-    // - Interaction with QPACK encoder/decoder instances (via connection)
 };

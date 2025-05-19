@@ -2,7 +2,7 @@
 set -e
 
 # Configuration
-ZIG_VERSION="0.15.0-dev.532+a3693aae3"
+ZIG_VERSION="0.15.0-dev.552+bc2f7c754"
 ZIG_URL="https://ziglang.org/builds/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
 INSTALL_DIR="/usr/local/zig"  # Installation directory
 BIN_LINK="/usr/local/bin/zig"  # Symlink location

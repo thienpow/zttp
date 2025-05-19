@@ -43,7 +43,7 @@ pub const Stream = struct {
 
         const initial_max_data = if (is_unidirectional)
             conn.initial_max_stream_data_uni
-        else if (stream_id % 2 == (if (conn.role == .client) 0 else 1))
+        else if (stream_id % 2 == (if (conn.role == .client) @as(u1, 0) else @as(u1, 1)))
             conn.initial_max_stream_data_bidi_local
         else
             conn.initial_max_stream_data_bidi_remote;
@@ -252,11 +252,9 @@ pub fn destroyStream(stream: *Stream) void {
 
 /// Open a new stream on the connection
 pub fn openStream(conn: *Connection, is_unidirectional: bool) !*Stream {
-    const stream_id_type_offset = if (conn.role == .client) {
-        if (is_unidirectional) 1 else 0;
-    } else {
-        if (is_unidirectional) 0 else 1;
-    };
+    const stream_id_type_offset: u64 = if (conn.role == .client)
+        if (is_unidirectional) 1 else 0
+    else if (is_unidirectional) 0 else 1;
     const stream_id = conn.next_local_stream_id + stream_id_type_offset;
 
     const max_streams = if (is_unidirectional) conn.initial_max_streams_uni else conn.initial_max_streams_bidi;

@@ -1,3 +1,4 @@
+// src/core/connection.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -34,8 +35,8 @@ const Http2Connection = http2.Http2Connection;
 const Http2Stream = http2.Stream;
 
 const http3 = @import("../http3/mod.zig");
-const QuicConnection = http3.QuicConnection;
-const QuicStream = http3.QuicStream;
+const Http3Connection = http3.Http3Connection;
+const Http3Stream = http3.Http3Stream;
 
 const tls = @import("tls.zig");
 
@@ -61,7 +62,7 @@ pub const Connection = struct {
     task_data: *ConnectionTaskData,
     protocol: Protocol,
     http2_conn: ?*Http2Connection = null,
-    quic_conn: ?*QuicConnection = null,
+    quic_conn: ?*Http3Connection = null,
     tls_conn: ?*tls.TlsConnection,
     quic_conn_id: ?[]const u8 = null,
     remote_address: ?std.net.Address = null, // Added for HTTP/3
@@ -808,10 +809,10 @@ fn handleHttp3PacketCompletion(_: *AsyncIo, task: *Task) !void {
     }
 
     if (conn.quic_conn == null) {
-        const quic_conn = try conn.allocator.create(QuicConnection);
+        var quic_conn = try conn.allocator.create(Http3Connection);
         errdefer conn.allocator.destroy(quic_conn);
 
-        quic_conn.* = try QuicConnection.init(
+        quic_conn = try Http3Connection.init(
             conn.allocator,
             conn.server,
             conn.server.async_io.?,

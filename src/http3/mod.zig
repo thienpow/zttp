@@ -1,46 +1,35 @@
-// src/http3/mod.zig
-
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
-// Import and re-export public types and functions from http3 sub-modules
+const Server = @import("../core/server.zig").Server;
+const Router = @import("../core/router.zig").Router;
+const AsyncIo = @import("../async/async.zig").AsyncIo;
 
-// Error types
-const http3_error = @import("error.zig");
-pub const ErrorCode = http3_error.ErrorCode;
-pub const Http3Error = http3_error.Http3Error;
+// Re-export public HTTP/3 types and functions
+pub const ErrorCode = @import("error.zig").ErrorCode;
+pub const Http3Error = @import("error.zig").Http3Error;
+pub const Settings = @import("settings.zig").Settings;
+pub const FrameType = @import("types.zig").FrameType;
+pub const StreamType = @import("types.zig").StreamType;
+pub const Frame = @import("types.zig").Frame;
+pub const Http3Connection = @import("connection.zig").Http3Connection;
+pub const Http3Stream = @import("stream.zig").Http3Stream;
+pub const readFrame = @import("frame.zig").readFrame;
+pub const writeFrame = @import("frame.zig").writeFrame;
+pub const QpackEncoder = @import("qpack/encoder.zig").QpackEncoder;
+pub const QpackDecoder = @import("qpack/decoder.zig").QpackDecoder;
+pub const Http3Handler = @import("handler.zig").Http3Handler;
 
-// Settings
-const settings = @import("settings.zig");
-pub const Settings = settings.Settings;
+/// Initializes the HTTP/3 subsystem for a server.
+pub fn initHttp3(server: *Server, allocator: Allocator, router: *Router, async_io: *AsyncIo, udp_fd: std.posix.fd_t) !*Http3Handler {
+    const handler = try Http3Handler.init(server, allocator, router);
+    server.http3_handler = handler;
+    try server.addUdpListener(udp_fd, async_io, handleUdpData, allocator);
+    return handler;
+}
 
-// Core types (FrameType, StreamType, Frame)
-const types = @import("types.zig");
-pub const FrameType = types.FrameType;
-pub const StreamType = types.StreamType;
-pub const Frame = types.Frame; // Re-export Frame struct/union
-
-// QUIC Connection representation (likely managed internally, but type might be needed)
-const connection = @import("connection.zig");
-pub const QuicConnection = connection.QuicConnection; // Represents a single QUIC connection
-
-// Stream representation (likely managed internally by connection/handler)
-// const stream = @import("stream.zig");
-// pub const QuicStream = stream.QuicStream; // Streams are likely managed internally
-
-// Frame parsing and serialization (likely internal to stream)
-// const frame = @import("frame.zig");
-// pub const readFrame = frame.readFrame;
-// pub const writeFrame = frame.writeFrame;
-
-// QPACK (Header Compression) (likely internal to frame/stream/connection)
-// const qpack = @import("qpack/mod.zig");
-// pub const QpackEncoder = qpack.QpackEncoder;
-// pub const QpackDecoder = qpack.QpackDecoder;
-
-// High-level HTTP/3 handler
-const handler = @import("handler.zig");
-pub const Http3Handler = handler.Http3Handler;
-
-// TODO: Add public functions for initializing the HTTP/3 subsystem within the server
-// This might involve starting the UDP listener and the main HTTP/3 event loop,
-// and potentially creating the Http3Handler instance.
+/// Handles incoming UDP data for HTTP/3, creating or routing to Http3Connection.
+fn handleUdpData(server: *Server, data: []const u8, addr: std.net.Address, allocator: Allocator) !void {
+    const conn = try server.getOrCreateHttp3Connection(addr, allocator);
+    try conn.handleUdpData(data);
+}

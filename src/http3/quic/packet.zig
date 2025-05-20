@@ -1,3 +1,4 @@
+// src/http3/quic/packet.zig
 // QUIC packet handling per RFC 9000
 
 const std = @import("std");
@@ -20,13 +21,19 @@ pub const PacketType = enum(u8) {
     connection_close = 0x1c,
 };
 
+/// ACK Range structure used for ACK frames
+pub const AckRange = struct {
+    gap: u64,
+    length: u64,
+};
+
 /// Represents a QUIC ACK frame (Type 0x02, 0x03)
 pub const AckFrame = struct {
     largest_acknowledged: u64,
     ack_delay: u64,
     ack_range_count: u64,
     first_ack_range: u64,
-    ack_ranges: std.ArrayList(struct { gap: u64, length: u64 }),
+    ack_ranges: std.ArrayList(AckRange),
 };
 
 /// Represents a QUIC CRYPTO frame (Type 0x06)
@@ -235,9 +242,10 @@ pub fn parsePacket(allocator: Allocator, data: []const u8, expected_dcid_len: us
         // Parse packet number (1-4 bytes)
         const pn_len = @as(usize, (first_byte & 0x03) + 1);
         if (data.len < cursor + pn_len) return error.PacketTooShort;
-        var pn_bytes: [4]u8 = .{0} ** 4;
-        @memcpy(pn_bytes[4 - pn_len ..], data[cursor .. cursor + pn_len]);
-        packet_number = std.mem.readInt(u64, &pn_bytes, .big);
+        packet_number = 0;
+        for (0..pn_len) |i| {
+            packet_number = (packet_number << 8) | @as(u64, data[cursor + i]);
+        }
         cursor += pn_len;
         payload_start = cursor;
         parsed_header = .{ .short = .{ .destination_connection_id = dcid_bytes } };
@@ -304,7 +312,7 @@ fn parseFrame(allocator: Allocator, data: []const u8, cursor_inout: *usize) !Fra
     cursor = cursor_inout.* + read_len - 1;
 
     switch (frame_type) {
-        0x02, 0x03 => {
+        0x02, 0x03 => { // ACK
             const largest_ack = try parse_vli(data[cursor..], &read_len);
             cursor += read_len;
             const ack_delay = try parse_vli(data[cursor..], &read_len);
@@ -314,7 +322,7 @@ fn parseFrame(allocator: Allocator, data: []const u8, cursor_inout: *usize) !Fra
             const first_ack_range = try parse_vli(data[cursor..], &read_len);
             cursor += read_len;
 
-            var ack_ranges = std.ArrayList(struct { gap: u64, length: u64 }).init(allocator);
+            var ack_ranges = std.ArrayList(AckRange).init(allocator);
             errdefer ack_ranges.deinit();
 
             var i: u64 = 0;
@@ -335,7 +343,7 @@ fn parseFrame(allocator: Allocator, data: []const u8, cursor_inout: *usize) !Fra
                 .ack_ranges = ack_ranges,
             } };
         },
-        0x05 => {
+        0x05 => { // STOP_SENDING
             const stream_id = try parse_vli(data[cursor..], &read_len);
             cursor += read_len;
             const error_code = try parse_vli(data[cursor..], &read_len);
@@ -347,7 +355,7 @@ fn parseFrame(allocator: Allocator, data: []const u8, cursor_inout: *usize) !Fra
                 .error_code = error_code,
             } };
         },
-        0x06 => {
+        0x06 => { // CRYPTO
             const offset = try parse_vli(data[cursor..], &read_len);
             cursor += read_len;
             const length = try parse_vli(data[cursor..], &read_len);
@@ -359,7 +367,7 @@ fn parseFrame(allocator: Allocator, data: []const u8, cursor_inout: *usize) !Fra
             cursor_inout.* = cursor;
             return .{ .crypto = .{ .offset = offset, .data = crypto_data } };
         },
-        0x08...0x0f => {
+        0x08...0x0b, 0x0d...0x0f => { // STREAM
             const flags = @as(u8, @intCast(frame_type)) & 0x07;
             const has_offset = (flags & 0x01) != 0;
             const has_length = (flags & 0x02) != 0;
@@ -395,7 +403,7 @@ fn parseFrame(allocator: Allocator, data: []const u8, cursor_inout: *usize) !Fra
                 .data = stream_data,
             } };
         },
-        0x0c => {
+        0x0c => { // MAX_STREAM_DATA
             const stream_id = try parse_vli(data[cursor..], &read_len);
             cursor += read_len;
             const max_data = try parse_vli(data[cursor..], &read_len);

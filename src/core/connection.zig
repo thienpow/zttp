@@ -262,7 +262,7 @@ const ConnectionTaskData = struct {
     pub fn init(allocator: Allocator, conn: *Connection, app_context_ptr: *anyopaque) !*ConnectionTaskData {
         const ctx = try allocator.create(Context);
         errdefer allocator.destroy(ctx);
-        ctx.* = Context.init(allocator);
+        ctx.* = Context.init(allocator, app_context_ptr, Request.init(allocator), Response.init(allocator));
         ctx.app_context_ptr = app_context_ptr;
 
         const data = try allocator.create(ConnectionTaskData);
@@ -621,7 +621,7 @@ fn handleWebSocketUpgrade(task_data: *ConnectionTaskData) !void {
 
     const ws_ctx = try conn.allocator.create(Context);
     errdefer conn.allocator.destroy(ws_ctx);
-    ws_ctx.* = Context.init(conn.allocator);
+    ws_ctx.* = Context.init(conn.allocator, task_data.ctx.app_context_ptr, req.*, Response.init(conn.allocator));
     task_data.ws_ctx = ws_ctx;
 
     task_data.ws_handler = conn.server.router.getWebSocketHandler(req.method, req.path, task_data.ctx) orelse return error.NoWebSocketHandler;

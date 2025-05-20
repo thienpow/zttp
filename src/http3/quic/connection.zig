@@ -175,7 +175,7 @@ pub const Connection = struct {
     pub fn processPacket(self: *Connection, data: []const u8) !void {
         if (data.len == 0) return error.EmptyPacket;
 
-        const pkt = try packet.parsePacket(self.allocator, data);
+        const pkt = try packet.parsePacket(self.allocator, data, self.dst_connection_id_len);
         defer packet.destroyPacket(pkt);
 
         self.latest_activity_time = @intCast(std.time.nanoTimestamp());
@@ -514,11 +514,9 @@ pub const Connection = struct {
         offset_to_first_byte: usize,
         offset_to_pn: usize,
     ) !struct { unprotected_first_byte: u8, pn_length: usize, packet_number: u64 } {
-        _ = packet_type;
         if (packet_data.len < offset_to_first_byte + 5) return error.BufferTooShort;
 
-        const hp_key = try crypto.deriveHeaderProtectionKey(self.tls_ctx);
-        defer self.allocator.free(hp_key);
+        const hp_key = crypto.deriveHeaderProtectionKey(self.tls_ctx, packet_type); // No 'try' or 'free'
 
         const sample_offset = offset_to_pn + 4;
         if (packet_data.len < sample_offset + 16) return error.BufferTooShort;
@@ -545,15 +543,13 @@ pub const Connection = struct {
 
     /// Decrypts packet payload per RFC 9001, Section 5.3.
     fn decryptPacketPayload(self: *Connection, packet_type: PacketType, packet_number: u64, encrypted_payload: []const u8) ![]u8 {
-        const pp_key = try crypto.derivePacketProtectionKey(self.tls_ctx, packet_type);
-        defer self.allocator.free(pp_key);
-        const pp_iv = try crypto.derivePacketProtectionIv(self.tls_ctx, packet_type);
-        defer self.allocator.free(pp_iv);
+        const pp_key = crypto.derivePacketProtectionKey(self.tls_ctx, packet_type); // No 'try' or 'free'
+        const pp_iv = crypto.derivePacketProtectionIv(self.tls_ctx, packet_type); // No 'try' or 'free'
 
         var nonce: [12]u8 = undefined;
         @memcpy(&nonce, pp_iv[0..12]);
         for (0..8) |i| {
-            nonce[nonce.len - 1 - i] ^= @as(u8, @intCast((packet_number >> (i * 8)) & 0xFF));
+            nonce[nonce.len - 1 - i] ^= @as(u8, @intCast((packet_number >> @intCast(i * 8)) & 0xFF));
         }
 
         const header_len = try self.getHeaderLength(packet_type, encrypted_payload);
@@ -562,7 +558,7 @@ pub const Connection = struct {
         return try crypto.decryptAead(
             self.allocator,
             pp_key,
-            nonce,
+            &nonce,
             encrypted_payload[header_len..],
             associated_data,
         );
@@ -760,8 +756,6 @@ pub const Connection = struct {
             } };
             try pkt.frames.append(frame);
             try self.outgoing_packets.append(pkt);
-
-
         } else {
             return error.UnknownStream;
         }

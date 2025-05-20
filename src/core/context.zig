@@ -1,16 +1,23 @@
 // src/core/context.zig
 const std = @import("std");
+const http = @import("../http/mod.zig");
+const Request = http.Request;
+const Response = http.Response;
 
 pub const Context = struct {
     allocator: std.mem.Allocator,
     data: std.StringHashMap([]const u8),
     app_context_ptr: ?*anyopaque,
+    req: Request,
+    res: Response,
 
-    pub fn init(allocator: std.mem.Allocator) Context {
+    pub fn init(allocator: std.mem.Allocator, app_context_ptr: ?*anyopaque, req: Request, res: Response) Context {
         return .{
             .allocator = allocator,
             .data = std.StringHashMap([]const u8).init(allocator),
-            .app_context_ptr = null,
+            .app_context_ptr = app_context_ptr,
+            .req = req,
+            .res = res,
         };
     }
 

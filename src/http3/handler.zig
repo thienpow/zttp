@@ -102,17 +102,19 @@ pub const Http3Handler = struct {
             try stream.handleResetStream(@intFromEnum(ErrorCode.internal_error));
             return Http3Error.InvalidFrame;
         };
-        res = try Response.init(self.allocator);
-        ctx = try Context.init(self.allocator, self.server.options.app_context_ptr, req.?, res.?);
+        res = Response.init(self.allocator);
+        ctx = Context.init(self.allocator, self.server.options.app_context_ptr, req.?, res.?);
 
         log.debug("Stream {d}: Routing request", .{stream.stream_id});
-        self.router.handleRequest(ctx.?, req.?, res.?) catch |err| {
-            log.err("Stream {d}: Router error: {}", .{ stream.stream_id, err });
-            res.?.status_code = if (err == error.RouteNotFound) 404 else 500;
-        };
+        if (self.router.getHandler(req.?.method, req.?.path, &ctx.?)) |handler| {
+            handler(&req.?, &res.?, &ctx.?);
+        } else {
+            log.err("Stream {d}: Route not found", .{stream.stream_id});
+            res.?.status = .not_found;
+        }
 
-        log.debug("Stream {d}: Sending response (status {d})", .{ stream.stream_id, res.?.status_code });
-        try stream.sendResponse(res.?);
+        log.debug("Stream {d}: Sending response (status {d})", .{ stream.stream_id, res.?.status });
+        try stream.sendResponse(&res.?);
         try stream.closeWrite();
 
         log.debug("Stream {d}: Handler task finished", .{stream.stream_id});

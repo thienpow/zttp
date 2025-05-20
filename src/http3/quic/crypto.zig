@@ -187,50 +187,91 @@ fn deriveKeySet(key_set: *KeySet, secret: []const u8) !void {
     try deriveSecret(&key_set.pp_iv, secret, "iv");
 }
 
+/// Helper struct for selecting keys based on packet type
+const KeySelector = struct {
+    client_keys: *const TlsContext.client_keys,
+    server_keys: *const TlsContext.server_keys,
+    is_server: bool,
+
+    fn getHpKey(self: KeySelector, packet_type: PacketType) *const [16]u8 {
+        const keys = if (self.is_server) self.server_keys else self.client_keys;
+        return switch (packet_type) {
+            .initial => &keys.initial.hp_key,
+            .handshake => &keys.handshake.hp_key,
+            .zero_rtt => &keys.zero_rtt.hp_key,
+            .short_header => &keys.application.hp_key,
+            else => &keys.application.hp_key,
+        };
+    }
+
+    fn getPpKey(self: KeySelector, packet_type: PacketType) *const [16]u8 {
+        const keys = if (self.is_server) self.server_keys else self.client_keys;
+        return switch (packet_type) {
+            .initial => &keys.initial.pp_key,
+            .handshake => &keys.handshake.pp_key,
+            .zero_rtt => &keys.zero_rtt.pp_key,
+            .short_header => &keys.application.pp_key,
+            else => &keys.application.pp_key,
+        };
+    }
+
+    fn getPpIv(self: KeySelector, packet_type: PacketType) *const [12]u8 {
+        const keys = if (self.is_server) self.server_keys else self.client_keys;
+        return switch (packet_type) {
+            .initial => &keys.initial.pp_iv,
+            .handshake => &keys.handshake.pp_iv,
+            .zero_rtt => &keys.zero_rtt.pp_iv,
+            .short_header => &keys.application.pp_iv,
+            else => &keys.application.pp_iv,
+        };
+    }
+};
+
 /// Derives header protection key per RFC 9001, Section 5.4
-pub fn deriveHeaderProtectionKey(ctx: *TlsContext, packet_type: PacketType) []const u8 {
-    const keys = if (ctx.is_server) &ctx.server_keys else &ctx.client_keys;
-    return switch (packet_type) {
-        .initial => &keys.initial.hp_key,
-        .handshake => &keys.handshake.hp_key,
-        .zero_rtt => &keys.zero_rtt.hp_key,
-        .short_header => &keys.application.hp_key,
-        else => &keys.application.hp_key,
+pub fn deriveHeaderProtectionKey(ctx: *TlsContext, packet_type: PacketType) *const [16]u8 {
+    const selector = KeySelector{
+        .client_keys = &ctx.client_keys,
+        .server_keys = &ctx.server_keys,
+        .is_server = ctx.is_server,
     };
+    return selector.getHpKey(packet_type);
 }
 
 /// Generates header protection mask per RFC 9001, Section 5.4.1
 pub fn generateHeaderProtectionMask(hp_key: []const u8, sample: []const u8, mask: []u8) !void {
     if (hp_key.len != 16 or sample.len != 16 or mask.len != 5) return error.InvalidInput;
-    var aes = try std.crypto.core.aes.Aes128.initEnc(hp_key);
+
+    var key_array: [16]u8 = undefined;
+    @memcpy(&key_array, hp_key);
+
+    var sample_array: [16]u8 = undefined;
+    @memcpy(&sample_array, sample);
+
+    var aes = std.crypto.core.aes.Aes128.initEnc(key_array);
     var encrypted: [16]u8 = undefined;
-    aes.encrypt(&encrypted, sample);
+    aes.encrypt(&encrypted, &sample_array);
     @memcpy(mask, encrypted[0..5]);
     log.debug("Generated header protection mask", .{});
 }
 
 /// Derives packet protection key per RFC 9001, Section 5.1
-pub fn derivePacketProtectionKey(ctx: *TlsContext, packet_type: PacketType) []const u8 {
-    const keys = if (ctx.is_server) &ctx.server_keys else &ctx.client_keys;
-    return switch (packet_type) {
-        .initial => &keys.initial.pp_key,
-        .handshake => &keys.handshake.pp_key,
-        .zero_rtt => &keys.zero_rtt.pp_key,
-        .short_header => &keys.application.pp_key,
-        else => &keys.application.pp_key,
+pub fn derivePacketProtectionKey(ctx: *TlsContext, packet_type: PacketType) *const [16]u8 {
+    const selector = KeySelector{
+        .client_keys = &ctx.client_keys,
+        .server_keys = &ctx.server_keys,
+        .is_server = ctx.is_server,
     };
+    return selector.getPpKey(packet_type);
 }
 
 /// Derives packet protection IV per RFC 9001, Section 5.1
-pub fn derivePacketProtectionIv(ctx: *TlsContext, packet_type: PacketType) []const u8 {
-    const keys = if (ctx.is_server) &ctx.server_keys else &ctx.client_keys;
-    return switch (packet_type) {
-        .initial => &keys.initial.pp_iv,
-        .handshake => &keys.handshake.pp_iv,
-        .zero_rtt => &keys.zero_rtt.pp_iv,
-        .short_header => &keys.application.pp_iv,
-        else => &keys.application.pp_iv,
+pub fn derivePacketProtectionIv(ctx: *TlsContext, packet_type: PacketType) *const [12]u8 {
+    const selector = KeySelector{
+        .client_keys = &ctx.client_keys,
+        .server_keys = &ctx.server_keys,
+        .is_server = ctx.is_server,
     };
+    return selector.getPpIv(packet_type);
 }
 
 /// Decrypts AEAD-protected payload per RFC 9001, Section 5.3

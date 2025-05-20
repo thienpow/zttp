@@ -55,14 +55,12 @@ pub const Request = struct {
         data: []const u8,
     };
 
-    pub fn parse(allocator: std.mem.Allocator, data: []const u8) !Request {
-        if (data.len > 65536) return RequestError.RequestTooLarge;
-
-        var req = Request{
+    pub fn init(allocator: std.mem.Allocator) Request {
+        return .{
             .allocator = allocator,
-            .method = undefined,
+            .method = .get,
             .path = "",
-            .version = "",
+            .version = "HTTP/1.1",
             .headers = HeaderMap.init(allocator),
             .query = std.StringHashMap([]const u8).init(allocator),
             .cookies = std.StringHashMap([]const u8).init(allocator),
@@ -72,16 +70,6 @@ pub const Request = struct {
             .form = null,
             .multipart = null,
         };
-        errdefer req.deinit();
-
-        var lines = std.mem.splitSequence(u8, data, "\r\n");
-        const request_line = lines.next() orelse return RequestError.InvalidRequestLine;
-        try parseRequestLine(allocator, request_line, &req);
-
-        try parseHeaders(allocator, &lines, &req);
-        try parseBody(allocator, data, &req);
-
-        return req;
     }
 
     pub fn deinit(self: *Request) void {
@@ -138,6 +126,35 @@ pub const Request = struct {
             }
             multipart.deinit();
         }
+    }
+
+    pub fn parse(allocator: std.mem.Allocator, data: []const u8) !Request {
+        if (data.len > 65536) return RequestError.RequestTooLarge;
+
+        var req = Request{
+            .allocator = allocator,
+            .method = undefined,
+            .path = "",
+            .version = "",
+            .headers = HeaderMap.init(allocator),
+            .query = std.StringHashMap([]const u8).init(allocator),
+            .cookies = std.StringHashMap([]const u8).init(allocator),
+            .body = null,
+            .json = null,
+            .json_arena = null,
+            .form = null,
+            .multipart = null,
+        };
+        errdefer req.deinit();
+
+        var lines = std.mem.splitSequence(u8, data, "\r\n");
+        const request_line = lines.next() orelse return RequestError.InvalidRequestLine;
+        try parseRequestLine(allocator, request_line, &req);
+
+        try parseHeaders(allocator, &lines, &req);
+        try parseBody(allocator, data, &req);
+
+        return req;
     }
 
     pub fn isKeepAlive(self: *const Request) bool {

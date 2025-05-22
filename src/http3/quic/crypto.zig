@@ -14,36 +14,32 @@ const KeySet = struct {
     pp_iv: [12]u8, // Packet protection IV
 };
 
+/// Collection of key sets for different packet types
+const KeyCollection = struct {
+    initial: KeySet,
+    handshake: KeySet,
+    zero_rtt: KeySet,
+    application: KeySet,
+};
+
+/// Collection of secrets for different packet types
+const SecretCollection = struct {
+    initial: [32]u8,
+    handshake: [32]u8,
+    zero_rtt: [32]u8,
+    application: [32]u8,
+};
+
 /// TLS context for QUIC connection per RFC 9001, Section 5
 pub const TlsContext = struct {
     allocator: Allocator,
     is_server: bool,
     handshake_complete: bool,
     initial_secret: [32]u8,
-    client_secrets: struct {
-        initial: [32]u8,
-        handshake: [32]u8,
-        zero_rtt: [32]u8,
-        application: [32]u8,
-    },
-    server_secrets: struct {
-        initial: [32]u8,
-        handshake: [32]u8,
-        zero_rtt: [32]u8,
-        application: [32]u8,
-    },
-    client_keys: struct {
-        initial: KeySet,
-        handshake: KeySet,
-        zero_rtt: KeySet,
-        application: KeySet,
-    },
-    server_keys: struct {
-        initial: KeySet,
-        handshake: KeySet,
-        zero_rtt: KeySet,
-        application: KeySet,
-    },
+    client_secrets: SecretCollection,
+    server_secrets: SecretCollection,
+    client_keys: KeyCollection,
+    server_keys: KeyCollection,
     handshake_state: enum { none, client_hello, server_hello, finished },
 
     /// Initializes a TLS context for QUIC
@@ -59,35 +55,42 @@ pub const TlsContext = struct {
         try hkdfExtract(&initial_secret, &initial_salt, &conn_id);
         log.debug("Derived initial secret for conn_id", .{});
 
+        // Initialize with zero values
+        const zero_keyset = KeySet{
+            .hp_key = [_]u8{0} ** 16,
+            .pp_key = [_]u8{0} ** 16,
+            .pp_iv = [_]u8{0} ** 12,
+        };
+
         // Create structures with runtime-mutable fields
         ctx.* = .{
             .allocator = allocator,
             .is_server = is_server,
             .handshake_complete = false,
             .initial_secret = initial_secret,
-            .client_secrets = .{
+            .client_secrets = SecretCollection{
                 .initial = [_]u8{0} ** 32,
                 .handshake = [_]u8{0} ** 32,
                 .zero_rtt = [_]u8{0} ** 32,
                 .application = [_]u8{0} ** 32,
             },
-            .server_secrets = .{
+            .server_secrets = SecretCollection{
                 .initial = [_]u8{0} ** 32,
                 .handshake = [_]u8{0} ** 32,
                 .zero_rtt = [_]u8{0} ** 32,
                 .application = [_]u8{0} ** 32,
             },
-            .client_keys = .{
-                .initial = KeySet{ .hp_key = [_]u8{0} ** 16, .pp_key = [_]u8{0} ** 16, .pp_iv = [_]u8{0} ** 12 },
-                .handshake = KeySet{ .hp_key = [_]u8{0} ** 16, .pp_key = [_]u8{0} ** 16, .pp_iv = [_]u8{0} ** 12 },
-                .zero_rtt = KeySet{ .hp_key = [_]u8{0} ** 16, .pp_key = [_]u8{0} ** 16, .pp_iv = [_]u8{0} ** 12 },
-                .application = KeySet{ .hp_key = [_]u8{0} ** 16, .pp_key = [_]u8{0} ** 16, .pp_iv = [_]u8{0} ** 12 },
+            .client_keys = KeyCollection{
+                .initial = zero_keyset,
+                .handshake = zero_keyset,
+                .zero_rtt = zero_keyset,
+                .application = zero_keyset,
             },
-            .server_keys = .{
-                .initial = KeySet{ .hp_key = [_]u8{0} ** 16, .pp_key = [_]u8{0} ** 16, .pp_iv = [_]u8{0} ** 12 },
-                .handshake = KeySet{ .hp_key = [_]u8{0} ** 16, .pp_key = [_]u8{0} ** 16, .pp_iv = [_]u8{0} ** 12 },
-                .zero_rtt = KeySet{ .hp_key = [_]u8{0} ** 16, .pp_key = [_]u8{0} ** 16, .pp_iv = [_]u8{0} ** 12 },
-                .application = KeySet{ .hp_key = [_]u8{0} ** 16, .pp_key = [_]u8{0} ** 16, .pp_iv = [_]u8{0} ** 12 },
+            .server_keys = KeyCollection{
+                .initial = zero_keyset,
+                .handshake = zero_keyset,
+                .zero_rtt = zero_keyset,
+                .application = zero_keyset,
             },
             .handshake_state = if (is_server) .none else .client_hello,
         };
@@ -104,13 +107,13 @@ pub const TlsContext = struct {
 
         // Derive key sets
         try deriveKeySet(&ctx.client_keys.initial, &ctx.client_secrets.initial);
-        try deriveKeySet(&ctx.server_keys.initial, &ctx.server_secrets.initial);
+        try deriveKeySet(&ctx.server_keys.initial, &ctx.client_secrets.initial);
         try deriveKeySet(&ctx.client_keys.handshake, &ctx.client_secrets.handshake);
-        try deriveKeySet(&ctx.server_keys.handshake, &ctx.server_secrets.handshake);
+        try deriveKeySet(&ctx.server_keys.handshake, &ctx.client_secrets.handshake);
         try deriveKeySet(&ctx.client_keys.zero_rtt, &ctx.client_secrets.zero_rtt);
-        try deriveKeySet(&ctx.server_keys.zero_rtt, &ctx.server_secrets.zero_rtt);
+        try deriveKeySet(&ctx.server_keys.zero_rtt, &ctx.client_secrets.zero_rtt);
         try deriveKeySet(&ctx.client_keys.application, &ctx.client_secrets.application);
-        try deriveKeySet(&ctx.server_keys.application, &ctx.server_secrets.application);
+        try deriveKeySet(&ctx.server_keys.application, &ctx.client_secrets.application);
 
         log.debug("Initialized TLS context (server={})", .{is_server});
         return ctx;
@@ -189,12 +192,10 @@ fn deriveKeySet(key_set: *KeySet, secret: []const u8) !void {
 
 /// Helper struct for selecting keys based on packet type
 const KeySelector = struct {
-    client_keys: *const TlsContext.client_keys,
-    server_keys: *const TlsContext.server_keys,
-    is_server: bool,
+    ctx: *const TlsContext,
 
     fn getHpKey(self: KeySelector, packet_type: PacketType) *const [16]u8 {
-        const keys = if (self.is_server) self.server_keys else self.client_keys;
+        const keys = if (self.ctx.is_server) &self.ctx.server_keys else &self.ctx.client_keys;
         return switch (packet_type) {
             .initial => &keys.initial.hp_key,
             .handshake => &keys.handshake.hp_key,
@@ -205,7 +206,7 @@ const KeySelector = struct {
     }
 
     fn getPpKey(self: KeySelector, packet_type: PacketType) *const [16]u8 {
-        const keys = if (self.is_server) self.server_keys else self.client_keys;
+        const keys = if (self.ctx.is_server) &self.ctx.server_keys else &self.ctx.client_keys;
         return switch (packet_type) {
             .initial => &keys.initial.pp_key,
             .handshake => &keys.handshake.pp_key,
@@ -216,7 +217,7 @@ const KeySelector = struct {
     }
 
     fn getPpIv(self: KeySelector, packet_type: PacketType) *const [12]u8 {
-        const keys = if (self.is_server) self.server_keys else self.client_keys;
+        const keys = if (self.ctx.is_server) &self.ctx.server_keys else &self.ctx.client_keys;
         return switch (packet_type) {
             .initial => &keys.initial.pp_iv,
             .handshake => &keys.handshake.pp_iv,
@@ -229,11 +230,7 @@ const KeySelector = struct {
 
 /// Derives header protection key per RFC 9001, Section 5.4
 pub fn deriveHeaderProtectionKey(ctx: *TlsContext, packet_type: PacketType) *const [16]u8 {
-    const selector = KeySelector{
-        .client_keys = &ctx.client_keys,
-        .server_keys = &ctx.server_keys,
-        .is_server = ctx.is_server,
-    };
+    const selector = KeySelector{ .ctx = ctx };
     return selector.getHpKey(packet_type);
 }
 
@@ -256,21 +253,13 @@ pub fn generateHeaderProtectionMask(hp_key: []const u8, sample: []const u8, mask
 
 /// Derives packet protection key per RFC 9001, Section 5.1
 pub fn derivePacketProtectionKey(ctx: *TlsContext, packet_type: PacketType) *const [16]u8 {
-    const selector = KeySelector{
-        .client_keys = &ctx.client_keys,
-        .server_keys = &ctx.server_keys,
-        .is_server = ctx.is_server,
-    };
+    const selector = KeySelector{ .ctx = ctx };
     return selector.getPpKey(packet_type);
 }
 
 /// Derives packet protection IV per RFC 9001, Section 5.1
 pub fn derivePacketProtectionIv(ctx: *TlsContext, packet_type: PacketType) *const [12]u8 {
-    const selector = KeySelector{
-        .client_keys = &ctx.client_keys,
-        .server_keys = &ctx.server_keys,
-        .is_server = ctx.is_server,
-    };
+    const selector = KeySelector{ .ctx = ctx };
     return selector.getPpIv(packet_type);
 }
 
@@ -288,11 +277,13 @@ pub fn decryptAead(
     const tag = ciphertext[ciphertext.len - 16 ..];
     const actual_ciphertext = ciphertext[0 .. ciphertext.len - 16];
 
-    var gcm = try std.crypto.aead.aes_gcm.Aes128Gcm.init(key, nonce);
     const decrypted = try allocator.alloc(u8, actual_ciphertext.len);
     errdefer allocator.free(decrypted);
 
-    try gcm.decryptAndVerify(decrypted, actual_ciphertext, tag, associated_data);
+    var tag_array: [16]u8 = undefined;
+    @memcpy(&tag_array, tag);
+
+    try std.crypto.aead.aes_gcm.Aes128Gcm.decrypt(decrypted, actual_ciphertext, tag_array, associated_data, nonce[0..12].*, key[0..16].*);
     log.debug("Decrypted payload (len={d})", .{decrypted.len});
     return decrypted;
 }

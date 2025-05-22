@@ -180,7 +180,12 @@ pub const Stream = struct {
 
         if (self.fin_sent and self.fin_received and self.state != .closed) {
             self.state = .closed;
-            self.conn.event_callback(self.conn, .{ .stream_closed = self.stream_id }, self.conn.user_ctx);
+            self.conn.event_callback(self.conn, .{
+                .stream_closed = .{
+                    .stream_id = self.stream_id,
+                    .error_code = 0, // No error, clean closure
+                },
+            }, self.conn.user_ctx);
         }
     }
 
@@ -194,6 +199,45 @@ pub const Stream = struct {
     pub fn sendData(self: *Stream, data: []const u8, is_fin: bool) !usize {
         log.debug("Sending {} bytes on stream {} (is_fin: {})", .{ data.len, self.stream_id, is_fin });
         return try self.write(data, is_fin);
+    }
+
+    /// Handle STOP_SENDING frame
+    pub fn handleStopSending(self: *Stream, error_code: u64) !void {
+        log.debug("Handling STOP_SENDING for stream {d}, error_code={d}", .{ self.stream_id, error_code });
+
+        if (self.state == .send_only or self.state == .closed) {
+            return; // Already in a state where sending is not allowed
+        }
+
+        self.fin_sent = true;
+        if (self.state == .ready) {
+            self.state = .recv_only;
+        } else if (self.state == .closing) {
+            self.state = .closed;
+        }
+
+        self.conn.event_callback(self.conn, .{ .stream_closed = .{
+            .stream_id = self.stream_id,
+            .error_code = error_code,
+        } }, self.conn.user_ctx);
+    }
+
+    /// Update the maximum stream data limit (MAX_STREAM_DATA frame)
+    pub fn updateMaxStreamData(self: *Stream, max_data: u64) !void {
+        log.debug("Updating MAX_STREAM_DATA for stream {d}, new max={d}", .{ self.stream_id, max_data });
+
+        if (self.state == .send_only or self.state == .closed) {
+            log.warn("Received MAX_STREAM_DATA for stream {d} in state {s}, ignoring", .{ self.stream_id, @tagName(self.state) });
+            return;
+        }
+
+        if (max_data < self.max_send_offset) {
+            log.warn("Received invalid MAX_STREAM_DATA for stream {d}: new max {d} < current {d}", .{ self.stream_id, max_data, self.max_send_offset });
+            try self.conn.close(0x03, "Flow control error"); // QUIC_FLOW_CONTROL_ERROR
+            return error.FlowControlError;
+        }
+
+        self.max_send_offset = max_data;
     }
 
     /// Close the send side of the stream

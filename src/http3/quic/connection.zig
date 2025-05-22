@@ -286,8 +286,8 @@ pub const Connection = struct {
             0x02, 0x03 => return try self.parseAckFrame(data, cursor, bytes_read_out),
             0x05 => return try self.parseStopSendingFrame(data, cursor, bytes_read_out),
             0x06 => return try self.parseCryptoFrame(data, cursor, bytes_read_out),
-            0x08...0x0f => return try self.parseStreamFrame(data, cursor, frame_type, bytes_read_out),
             0x0c => return try self.parseMaxStreamDataFrame(data, cursor, bytes_read_out),
+            0x08, 0x09, 0x0a, 0x0b, 0x0d, 0x0e, 0x0f => return try self.parseStreamFrame(data, cursor, frame_type, bytes_read_out),
             else => return error.UnknownFrameType,
         }
     }
@@ -306,7 +306,8 @@ pub const Connection = struct {
         const first_ack_range = try parse_vli(data[cursor..], &vli_read_len);
         cursor += vli_read_len;
 
-        var ack_ranges = std.ArrayList(struct { gap: u64, length: u64 }).init(self.allocator);
+        // Use the proper AckRange type from packet module
+        var ack_ranges = std.ArrayList(packet.AckRange).init(self.allocator);
         errdefer ack_ranges.deinit();
 
         var i: u64 = 0;
@@ -315,7 +316,7 @@ pub const Connection = struct {
             cursor += vli_read_len;
             const length = try parse_vli(data[cursor..], &vli_read_len);
             cursor += vli_read_len;
-            try ack_ranges.append(.{ .gap = gap, .length = length });
+            try ack_ranges.append(packet.AckRange{ .gap = gap, .length = length });
         }
 
         bytes_read_out.* = cursor;
@@ -430,7 +431,7 @@ pub const Connection = struct {
         while (cursor < payload.len) {
             var bytes_read: usize = 0;
             const frame = try self.parseFrame(payload[cursor..], &bytes_read);
-            log.debug("Processing frame: {}", .{@tagName(frame)});
+            log.debug("Processing frame: {s}", .{@tagName(frame)});
             try self.processFrame(frame);
             cursor += bytes_read;
         }
@@ -460,7 +461,7 @@ pub const Connection = struct {
                     try stream.updateMaxStreamData(max_stream_data.max_data);
                 }
             },
-            .raw => log.warn("Received unprocessed frame type", .{}),
+            else => log.warn("Received unprocessed frame type: {s}", .{@tagName(frame)}),
         }
     }
 

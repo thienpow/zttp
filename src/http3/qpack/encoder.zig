@@ -150,11 +150,11 @@ pub const QpackEncoder = struct {
         return false;
     }
 
-    fn tryEncodeStaticNameRef(_: *QpackEncoder, header_block: *ArrayList(u8), name: []const u8, value: []const u8) !bool {
+    fn tryEncodeStaticNameRef(self: *QpackEncoder, header_block: *ArrayList(u8), name: []const u8, value: []const u8) !bool {
         const name_index = StaticTable.findName(name) catch return false;
         try header_block.append(0x50); // Literal with Static Name
         try utils.writeInt(header_block, name_index, 4);
-        try encodeLiteral(header_block, value);
+        try encodeLiteral(self, header_block, value);
         return true;
     }
 
@@ -163,33 +163,33 @@ pub const QpackEncoder = struct {
             if (std.mem.eql(u8, entry.name, name)) {
                 try header_block.append(0x40); // Literal with Dynamic Name
                 try utils.writeInt(header_block, i, 4);
-                try encodeLiteral(header_block, value);
+                try encodeLiteral(self, header_block, value);
                 return true;
             }
         }
         return false;
     }
 
-    fn encodeLiteralWithLiteralName(_: *QpackEncoder, header_block: *ArrayList(u8), name: []const u8, value: []const u8) !void {
+    fn encodeLiteralWithLiteralName(self: *QpackEncoder, header_block: *ArrayList(u8), name: []const u8, value: []const u8) !void {
         try header_block.append(0x20); // Literal with Literal Name
-        try encodeLiteral(header_block, name);
-        try encodeLiteral(header_block, value);
+        try encodeLiteral(self, header_block, name);
+        try encodeLiteral(self, header_block, value);
     }
 
-    fn encodeLiteral(header_block: *ArrayList(u8), value: []const u8) !void {
+    fn encodeLiteral(self: *QpackEncoder, header_block: *ArrayList(u8), value: []const u8) !void {
         if (value.len <= 7) {
             try header_block.append(@intCast(value.len));
             try header_block.appendSlice(value);
         } else {
             try header_block.append(0x08 | @as(u8, @intCast(value.len)));
-            try huffman.encodeHuffman(header_block, value);
+            try huffman.encodeHuffman(header_block, value, self.allocator);
         }
     }
 
     fn addToDynamicTable(self: *QpackEncoder, name: []const u8, value: []const u8) !void {
         const entry_size = name.len + value.len + 32;
-        while (self.dynamic_table_size + entry_size > self.max_table_capacity and !self.dynamic_table.isEmpty()) {
-            const oldest = self.dynamic_table.pop();
+        while (self.dynamic_table_size + entry_size > self.max_table_capacity and self.dynamic_table.items.len > 0) {
+            const oldest = self.dynamic_table.pop().?;
             self.dynamic_table_size -= oldest.name.len + oldest.value.len + 32;
             self.allocator.free(oldest.name);
             self.allocator.free(oldest.value);
@@ -201,8 +201,8 @@ pub const QpackEncoder = struct {
 
         // Generate instruction: Insert with Literal Name
         try self.encoder_instructions.append(0x40);
-        try encodeLiteral(&self.encoder_instructions, name);
-        try encodeLiteral(&self.encoder_instructions, value);
+        try encodeLiteral(self, &self.encoder_instructions, name);
+        try encodeLiteral(self, &self.encoder_instructions, value);
 
         const name_copy = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(name_copy);

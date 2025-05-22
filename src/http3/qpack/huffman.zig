@@ -203,7 +203,7 @@ pub fn encodeHuffman(writer: anytype, input: []const u8, allocator: Allocator) !
                     try bits.append(byte_to_write);
                     bit_count += shift;
                     bits_left -= shift;
-                    code &= (1 << bits_left) - 1;
+                    code &= (@as(u32, 1) << @as(u5, @intCast(bits_left))) - 1;
                 }
                 break;
             }
@@ -215,19 +215,19 @@ pub fn encodeHuffman(writer: anytype, input: []const u8, allocator: Allocator) !
         const padding_bits = 8 - (bit_count % 8);
         const eos_code = huffman_table[255].code;
         const eos_bits = huffman_table[255].bits;
-        const pad_code = eos_code >> (eos_bits - padding_bits);
+        const pad_code = eos_code >> @as(u5, @intCast(eos_bits - padding_bits));
         try bits.append(@intCast(pad_code));
         bit_count += padding_bits;
     }
 
     try writeInt(writer, bit_count / 8, 7);
-    try writer.writeAll(bits.items);
+    try writer.appendSlice(bits.items);
 }
 
 /// Reads an integer with the given prefix length.
 fn readInt(reader: anytype, comptime T: type, prefix_len: u8) !T {
     const first_byte = try reader.readByte();
-    const mask = @as(T, 1) << prefix_len - 1;
+    const mask = @as(u64, 1) << @as(u6, @intCast(prefix_len - 1));
     var value = @as(T, first_byte) & mask;
     if (value < mask) {
         return value;
@@ -245,16 +245,16 @@ fn readInt(reader: anytype, comptime T: type, prefix_len: u8) !T {
 
 /// Writes an integer with the given prefix length.
 fn writeInt(writer: anytype, value: u64, prefix_len: u8) !void {
-    const mask = @as(u64, 1) << prefix_len - 1;
+    const mask = @as(u64, 1) << @as(u6, @intCast(prefix_len - 1));
     if (value < mask) {
-        try writer.writeByte(@intCast(value));
+        try writer.append(@intCast(value)); // Changed from writeByte
         return;
     }
-    try writer.writeByte(@intCast(mask | (value & (mask - 1))));
-    var remaining = value >> prefix_len;
+    try writer.append(@intCast(mask | (value & (mask - 1)))); // Changed from writeByte
+    var remaining = value >> @as(u6, @intCast(prefix_len));
     while (remaining >= 128) {
-        try writer.writeByte(@intCast((remaining & 0x7F) | 0x80));
+        try writer.append(@intCast((remaining & 0x7F) | 0x80)); // Changed from writeByte
         remaining >>= 7;
     }
-    try writer.writeByte(@intCast(remaining));
+    try writer.append(@intCast(remaining)); // Changed from writeByte
 }

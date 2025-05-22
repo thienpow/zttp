@@ -1,3 +1,4 @@
+// src/http3/frame.zig
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const log = std.log.scoped(.http3_frame);
@@ -49,7 +50,7 @@ pub fn readFrame(allocator: Allocator, reader: anytype) !Frame {
             return Frame{ .cancel_push = .{ .push_id = push_id } };
         },
         .settings => {
-            const settings_struct = settings.parse(allocator, payload) catch |err| {
+            const settings_struct = Settings.parse(allocator, payload) catch |err| {
                 allocator.free(payload);
                 log.err("readFrame: Failed to parse SETTINGS: {}", .{err});
                 return Http3Error.FrameError;
@@ -187,8 +188,8 @@ fn readVliFromReader(reader: anytype) !u64 {
         return err;
     };
     const prefix = first_byte >> 6;
-    var value: u64 = first_byte & 0x3F;
-    const bytes_to_read = switch (prefix) {
+    var result: u64 = first_byte & 0x3F;
+    const bytes_to_read: u8 = switch (prefix) {
         0b00 => 0,
         0b01 => 1,
         0b10 => 3,
@@ -197,14 +198,14 @@ fn readVliFromReader(reader: anytype) !u64 {
     };
 
     var i: u8 = 0;
-    var shift: u8 = 6;
+    var shift: u6 = 6;
     while (i < bytes_to_read) : (i += 1) {
         const byte = reader.readByte() catch |err| {
             if (err == error.EndOfStream) return Http3Error.NeedMoreData;
             return err;
         };
-        value |= @as(u64, byte) << shift;
+        result |= @as(u64, byte) << shift;
         shift += 8;
     }
-    return value;
+    return result;
 }

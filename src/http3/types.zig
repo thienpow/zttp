@@ -8,6 +8,7 @@ pub const Settings = settings.Settings;
 /// HTTP/3 Error Types
 pub const Http3Error = error{
     FrameError,
+    FrameUnexpected,
     NeedMoreData,
     InvalidVli,
 };
@@ -42,7 +43,7 @@ pub const Frame = union(FrameType) {
         switch (self) {
             .data => |f| allocator.free(f.payload),
             .headers => |f| allocator.free(f.encoded_block),
-            ._ => |f| allocator.free(f.payload),
+            .reserved => |f| allocator.free(f.payload),
             else => {},
         }
     }

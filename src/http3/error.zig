@@ -30,7 +30,7 @@ pub const ErrorCode = enum(u62) {
     pub fn fromHttp3Error(err: Http3Error) ?ErrorCode {
         return switch (err) {
             error.ProtocolError => .general_protocol_error,
-            error.InvalidFrame, error.UnexpectedFrameType => .frame_error,
+            error.InvalidFrame, error.FrameUnexpected => .frame_error,
             error.QpackDecompressionFailed => .qpack_decompression_failed,
             error.QpackStreamError => .qpack_encoder_stream_error,
             error.InvalidStreamState, error.UnknownStream => .stream_creation_error,

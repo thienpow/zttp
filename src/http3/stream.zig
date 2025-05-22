@@ -92,33 +92,30 @@ pub const Http3Stream = struct {
         self.state = .receiving;
 
         while (self.read_buffer.items.len > 0) {
-            const reader = std.io.fixedBufferStream(&self.read_buffer.items).reader();
+            var stream = std.io.FixedBufferStream([]u8){ .buffer = self.read_buffer.items, .pos = 0 };
+            const reader = stream.reader();
+
             if (self.parser_state == .waiting_for_frame_header and self.read_buffer.items.len < 2) break;
 
             const frame_result = readFrame(self.allocator, reader);
-            const consumed = reader.pos;
+            const consumed = stream.pos;
 
-            switch (frame_result) {
-                .ok => |frame| {
-                    try self.handleFrame(frame);
-                    frame.deinit(self.allocator);
-                    self.parser_state = .waiting_for_frame_header;
-                    if (self.parser_state == .request_complete) {
-                        try self.dispatchRequestToHandler();
-                        break;
-                    }
-                },
-                .err => |err| switch (err) {
-                    Http3Error.NeedMoreData => {
-                        self.parser_state = .reading_frame_payload;
-                        break;
-                    },
-                    else => {
-                        log.err("Stream {d}: Frame parse error: {}", .{ self.stream_id, err });
-                        try self.connection.asyncClose(.frame_error);
-                        return err;
-                    },
-                },
+            const frame = frame_result catch |err| {
+                if (err == Http3Error.NeedMoreData) {
+                    self.parser_state = .reading_frame_payload;
+                    break;
+                }
+                log.err("Stream {d}: Frame parse error: {}", .{ self.stream_id, err });
+                try self.connection.asyncClose(.frame_error);
+                return err;
+            };
+
+            try self.handleFrame(frame);
+            frame.deinit(self.allocator);
+            self.parser_state = .waiting_for_frame_header;
+            if (self.parser_state == .request_complete) {
+                try self.dispatchRequestToHandler();
+                break;
             }
 
             self.read_buffer.shrinkAndFree(self.read_buffer.items.len - consumed);
@@ -152,65 +149,71 @@ pub const Http3Stream = struct {
     fn handleFrame(self: *Http3Stream, frame: Frame) !void {
         log.debug("Stream {d}: Handling frame {} (type: {?})", .{ self.stream_id, frame, self.stream_type });
 
-        switch (self.stream_type) {
-            .control => switch (frame) {
-                .settings => {
-                    log.debug("Stream {d}: Processing SETTINGS", .{self.stream_id});
-                    // Assume connection applies settings
-                    self.connection.settings = frame.settings;
+        if (self.stream_type) |stream_type| {
+            switch (stream_type) {
+                .control => switch (frame) {
+                    .settings => {
+                        log.debug("Stream {d}: Processing SETTINGS", .{self.stream_id});
+                        self.connection.settings = frame.settings;
+                    },
+                    .goaway => {
+                        log.info("Stream {d}: GOAWAY (stream_id: {d})", .{ self.stream_id, frame.goaway.stream_id });
+                        try self.connection.asyncClose(.no_error);
+                    },
+                    .max_push_id => {
+                        log.debug("Stream {d}: MAX_PUSH_ID (id: {d})", .{ self.stream_id, frame.max_push_id.push_id });
+                    },
+                    else => {
+                        log.err("Stream {d}: Unexpected frame {} on control stream", .{ self.stream_id, frame });
+                        try self.connection.asyncClose(.frame_unexpected);
+                        return Http3Error.FrameUnexpected;
+                    },
                 },
-                .goaway => {
-                    log.info("Stream {d}: GOAWAY (stream_id: {d})", .{ self.stream_id, frame.goaway.stream_id });
-                    try self.connection.asyncClose(.no_error);
+                .push => {
+                    log.err("Stream {d}: Push streams not supported", .{self.stream_id});
+                    try self.connection.asyncClose(.protocol_error);
+                    return Http3Error.ProtocolError;
                 },
-                .max_push_id => {
-                    log.debug("Stream {d}: MAX_PUSH_ID (id: {d})", .{ self.stream_id, frame.max_push_id.push_id });
-                    // Update connection push ID limit
+                .encoder => switch (frame) {
+                    .data => if (self.connection.qpack_decoder) |decoder| {
+                        try decoder.processInstructions(frame.data.payload);
+                    } else {
+                        log.err("Stream {d}: No QPACK decoder", .{self.stream_id});
+                        try self.connection.asyncClose(.internal_error);
+                        return Http3Error.FrameError;
+                    },
+                    .padding, .ping => {},
+                    .reserved => {},
+                    else => {
+                        log.err("Stream {d}: Unexpected frame {} on encoder stream", .{ self.stream_id, frame });
+                        try self.connection.asyncClose(.frame_unexpected);
+                        return Http3Error.FrameUnexpected;
+                    },
                 },
-                else => {
-                    log.err("Stream {d}: Unexpected frame {} on control stream", .{ self.stream_id, frame });
-                    try self.connection.asyncClose(.frame_unexpected);
-                    return Http3Error.FrameUnexpected;
+                .decoder => switch (frame) {
+                    .data => if (self.connection.qpack_encoder) |encoder| {
+                        try encoder.processInstructions(frame.data.payload);
+                    } else {
+                        log.err("Stream {d}: No QPACK encoder", .{self.stream_id});
+                        try self.connection.asyncClose(.internal_error);
+                        return Http3Error.FrameError;
+                    },
+                    .padding, .ping => {},
+                    .reserved => {},
+                    else => {
+                        log.err("Stream {d}: Unexpected frame {} on decoder stream", .{ self.stream_id, frame });
+                        try self.connection.asyncClose(.frame_unexpected);
+                        return Http3Error.FrameUnexpected;
+                    },
                 },
-            },
-            .push => {
-                log.err("Stream {d}: Push streams not supported", .{self.stream_id});
-                try self.connection.asyncClose(.protocol_error);
-                return Http3Error.ProtocolError;
-            },
-            .encoder => switch (frame) {
-                .data => if (self.connection.qpack_decoder) |decoder| {
-                    try decoder.processInstructions(frame.data.payload);
-                } else {
-                    log.err("Stream {d}: No QPACK decoder", .{self.stream_id});
-                    try self.connection.asyncClose(.internal_error);
-                    return Http3Error.FrameError;
+                .request => {
+                    log.err("Stream {d}: Request stream not expected in this context", .{self.stream_id});
+                    try self.connection.asyncClose(.protocol_error);
+                    return Http3Error.ProtocolError;
                 },
-                .padding, .ping => {},
-                .reserved => {},
-                else => {
-                    log.err("Stream {d}: Unexpected frame {} on encoder stream", .{ self.stream_id, frame });
-                    try self.connection.asyncClose(.frame_unexpected);
-                    return Http3Error.FrameUnexpected;
-                },
-            },
-            .decoder => switch (frame) {
-                .data => if (self.connection.qpack_encoder) |encoder| {
-                    try encoder.processInstructions(frame.data.payload);
-                } else {
-                    log.err("Stream {d}: No QPACK encoder", .{self.stream_id});
-                    try self.connection.asyncClose(.internal_error);
-                    return Http3Error.FrameError;
-                },
-                .padding, .ping => {},
-                .reserved => {},
-                else => {
-                    log.err("Stream {d}: Unexpected frame {} on decoder stream", .{ self.stream_id, frame });
-                    try self.connection.asyncClose(.frame_unexpected);
-                    return Http3Error.FrameUnexpected;
-                },
-            },
-            null => switch (self.parser_state) {
+            }
+        } else {
+            switch (self.parser_state) {
                 .waiting_for_headers => switch (frame) {
                     .headers => {
                         const decoder = self.connection.qpack_decoder orelse {
@@ -284,7 +287,7 @@ pub const Http3Stream = struct {
                     try self.connection.asyncClose(.internal_error);
                     return Http3Error.FrameError;
                 },
-            },
+            }
         }
     }
 
@@ -314,7 +317,7 @@ pub const Http3Stream = struct {
 
     pub fn writeDataAndEnd(self: *Http3Stream, data: []const u8) !void {
         if (self.state == .closed or self.state == .errored or self.state == .half_closed_local) {
-            log.warn("Stream {d}: Invalid write state {}", .{self.state});
+            log.warn("Stream {d}: Invalid write state {}", .{ self.stream_id, self.state });
             return Http3Error.FrameError;
         }
         try self.connection.sendStreamData(self.stream_id, data, true);
@@ -352,8 +355,10 @@ pub const Http3Stream = struct {
         defer self.allocator.free(encoded);
         try writeFrame(self.allocator, buf.writer(), .{ .headers = .{ .encoded_block = encoded } });
 
-        if (response.body.len > 0) {
-            try writeFrame(self.allocator, buf.writer(), .{ .data = .{ .payload = response.body } });
+        if (response.body) |body| {
+            if (body.len > 0) {
+                try writeFrame(self.allocator, buf.writer(), .{ .data = .{ .payload = body } });
+            }
         }
 
         try self.writeDataAndEnd(buf.items);

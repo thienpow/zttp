@@ -753,20 +753,23 @@ fn handleHttp2FrameCompletion(_: *AsyncIo, task: *Task) !void {
         var stream_it = http2_conn.streams.streams.iterator();
         while (stream_it.next()) |stream_entry| {
             const stream = stream_entry.value_ptr.*;
-            if (stream.request) |req| {
+            if (stream.request) |req_value| {
                 if (stream.state == .half_closed_remote or stream.state == .closed) {
-                    if (task_data.http2_stream_responses.get(stream.id)) |existing_res| {
-                        _ = existing_res;
+                    // Check if we already have a response for this stream
+                    if (task_data.http2_stream_responses.get(stream.id)) |_| {
                         continue;
                     }
 
+                    // Create response
                     const res = try conn.allocator.create(Response);
                     errdefer conn.allocator.destroy(res);
                     res.* = Response.init(conn.allocator);
                     try task_data.http2_stream_responses.put(stream.id, res);
 
-                    const route_handler = conn.server.router.getHandler(req.method, req.path, task_data.ctx) orelse utils.notFound;
-                    route_handler(req, res, task_data.ctx);
+                    // Handle the request - create a local variable and get its address
+                    const local_req = req_value;
+                    const route_handler = conn.server.router.getHandler(local_req.method, local_req.path, task_data.ctx) orelse utils.notFound;
+                    route_handler(local_req, res, task_data.ctx);
 
                     try http2_conn.sendResponse(stream, res);
                 }
@@ -830,20 +833,23 @@ fn handleHttp3PacketCompletion(_: *AsyncIo, task: *Task) !void {
         var stream_it = quic_conn.streams.valueIterator();
         while (stream_it.next()) |stream_ptr| {
             const stream = stream_ptr.*;
-            if (stream.request) |req| {
+            if (stream.request) |req_value| {
                 if (stream.state == .half_closed_remote or stream.state == .closed) {
-                    if (task_data.quic_stream_responses.get(stream.stream_id)) |existing_res| {
-                        _ = existing_res;
+                    // Check if we already have a response for this stream
+                    if (task_data.quic_stream_responses.get(stream.stream_id)) |_| {
                         continue;
                     }
 
+                    // Create response
                     const res = try conn.allocator.create(Response);
                     errdefer conn.allocator.destroy(res);
                     res.* = Response.init(conn.allocator);
                     try task_data.quic_stream_responses.put(stream.stream_id, res);
 
-                    const route_handler = conn.server.router.getHandler(req.method, req.path, task_data.ctx) orelse utils.notFound;
-                    route_handler(req, res, task_data.ctx);
+                    // Handle the request - create a local variable and get its address
+                    var local_req = req_value;
+                    const route_handler = conn.server.router.getHandler(local_req.method, local_req.path, task_data.ctx) orelse utils.notFound;
+                    route_handler(&local_req, res, task_data.ctx);
 
                     try stream.sendResponse(res);
                 }

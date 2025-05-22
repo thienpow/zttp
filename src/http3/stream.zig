@@ -92,7 +92,7 @@ pub const Http3Stream = struct {
         self.state = .receiving;
 
         while (self.read_buffer.items.len > 0) {
-            const reader = std.io.fixedBufferStream(self.read_buffer.items).reader();
+            const reader = std.io.fixedBufferStream(&self.read_buffer.items).reader();
             if (self.parser_state == .waiting_for_frame_header and self.read_buffer.items.len < 2) break;
 
             const frame_result = readFrame(self.allocator, reader);
@@ -326,7 +326,7 @@ pub const Http3Stream = struct {
             log.warn("Stream {d}: Invalid state {}", .{ self.stream_id, self.state });
             return Http3Error.FrameError;
         }
-        self.response = response;
+        self.response = response.*;
         self.state = .sending;
 
         var buf = std.ArrayList(u8).init(self.allocator);
@@ -340,10 +340,12 @@ pub const Http3Stream = struct {
 
         var header_map = HeaderMap.init(self.allocator);
         defer header_map.deinit();
-        try header_map.put(":status", try std.fmt.allocPrint(self.allocator, "{d}", .{response.status_code}));
+        try header_map.put(":status", try std.fmt.allocPrint(self.allocator, "{d}", .{response.status}));
         var it = response.headers.iterator();
         while (it.next()) |entry| {
-            try header_map.put(entry.key_ptr.*, entry.value_ptr.*);
+            for (entry.value_ptr.items) |value| {
+                try header_map.put(entry.key_ptr.*, value);
+            }
         }
 
         const encoded = try encoder.encodeHeaders(header_map);

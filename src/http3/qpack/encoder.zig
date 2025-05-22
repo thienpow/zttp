@@ -7,7 +7,7 @@ const Http3Error = @import("../error.zig").Http3Error;
 const ErrorCode = @import("../error.zig").ErrorCode;
 const HeaderMap = @import("../../http/header_map.zig").HeaderMap;
 
-const static_table = @import("static_table.zig");
+const StaticTable = @import("static_table.zig").StaticTable;
 const huffman = @import("huffman.zig");
 
 const utils = @import("utils.zig");
@@ -133,7 +133,7 @@ pub const QpackEncoder = struct {
     }
 
     fn tryEncodeStaticTable(_: *QpackEncoder, header_block: *ArrayList(u8), name: []const u8, value: []const u8) !bool {
-        const index = static_table.findEntry(name, value) catch return false;
+        const index = StaticTable.findEntry(name, value) catch return false;
         try header_block.append(0x80 | 0x40); // Indexed Static
         try utils.writeInt(header_block, index, 6);
         return true;
@@ -151,7 +151,7 @@ pub const QpackEncoder = struct {
     }
 
     fn tryEncodeStaticNameRef(_: *QpackEncoder, header_block: *ArrayList(u8), name: []const u8, value: []const u8) !bool {
-        const name_index = static_table.findName(name) catch return false;
+        const name_index = StaticTable.findName(name) catch return false;
         try header_block.append(0x50); // Literal with Static Name
         try utils.writeInt(header_block, name_index, 4);
         try encodeLiteral(header_block, value);

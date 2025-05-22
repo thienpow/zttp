@@ -2,7 +2,7 @@
 const std = @import("std");
 const ArrayList = std.ArrayList;
 
-pub fn writeInt(writer: *ArrayList(u8), value: u64, prefix_len: u8) !void {
+pub fn writeInt(writer: *ArrayList(u8), value: u64, prefix_len: u6) !void {
     const mask = (@as(u64, 1) << prefix_len) - 1;
     if (value < mask) {
         try writer.append(@intCast(value));
@@ -17,7 +17,7 @@ pub fn writeInt(writer: *ArrayList(u8), value: u64, prefix_len: u8) !void {
     try writer.append(@intCast(remaining));
 }
 
-pub fn readInt(reader: anytype, comptime T: type, prefix_len: u8) !T {
+pub fn readInt(reader: anytype, comptime T: type, prefix_len: u6) !T {
     const first_byte = try reader.readByte();
     const mask = (@as(T, 1) << prefix_len) - 1;
     var value = @as(T, first_byte) & mask;

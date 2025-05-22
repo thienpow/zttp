@@ -15,13 +15,13 @@ const utils = @import("utils.zig");
 const log = std.log.scoped(.qpack_decoder);
 
 /// Represents a single entry in the dynamic table.
-const DynamicTableEntry = struct {
+pub const DynamicTableEntry = struct {
     name: []const u8,
     value: []const u8,
 };
 
 /// Structure to represent a blocked stream
-const BlockedStream = struct {
+pub const BlockedStream = struct {
     stream_id: u64,
     header_block: []const u8,
 };

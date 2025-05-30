@@ -171,7 +171,7 @@ pub const Http3Stream = struct {
                 },
                 .push => {
                     log.err("Stream {d}: Push streams not supported", .{self.stream_id});
-                    try self.connection.asyncClose(.protocol_error);
+                    try self.connection.asyncClose(.general_protocol_error);
                     return Http3Error.ProtocolError;
                 },
                 .encoder => switch (frame) {
@@ -182,7 +182,7 @@ pub const Http3Stream = struct {
                         try self.connection.asyncClose(.internal_error);
                         return Http3Error.FrameError;
                     },
-                    .padding, .ping => {},
+                    .ping => {},
                     .reserved => {},
                     else => {
                         log.err("Stream {d}: Unexpected frame {} on encoder stream", .{ self.stream_id, frame });
@@ -210,6 +210,20 @@ pub const Http3Stream = struct {
                     log.err("Stream {d}: Request stream not expected in this context", .{self.stream_id});
                     try self.connection.asyncClose(.protocol_error);
                     return Http3Error.ProtocolError;
+                },
+                .webtransport => switch (frame) {
+                    .data => {
+                        // Append data to body buffer for WebTransport stream
+                        try self.body_buffer.appendSlice(frame.data.payload);
+                    },
+                    .padding, .ping, .reserved => {
+                        // Ignore padding, ping, and reserved frames
+                    },
+                    else => {
+                        log.err("Stream {d}: Unexpected frame {} on webtransport stream", .{ self.stream_id, frame });
+                        try self.connection.asyncClose(.frame_unexpected);
+                        return Http3Error.FrameUnexpected;
+                    },
                 },
             }
         } else {

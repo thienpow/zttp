@@ -159,7 +159,9 @@ pub fn decodeHuffman(reader: anytype, allocator: Allocator) ![]u8 {
 
     for (input) |byte| {
         for (0..8) |bit| {
-            current_code = (current_code << 1) | ((byte >> (7 - bit)) & 1);
+            const bit_u3: u3 = @intCast(bit);
+            const shift_amount: u3 = 7 - bit_u3;
+            current_code = (current_code << 1) | ((byte >> shift_amount) & 1);
             current_bits += 1;
 
             for (huffman_table) |entry| {
@@ -225,14 +227,14 @@ pub fn encodeHuffman(writer: anytype, input: []const u8, allocator: Allocator) !
 }
 
 /// Reads an integer with the given prefix length.
-fn readInt(reader: anytype, comptime T: type, prefix_len: u8) !T {
+fn readInt(reader: anytype, comptime T: type, prefix_len: u6) !T {
     const first_byte = try reader.readByte();
-    const mask = @as(u64, 1) << @as(u6, @intCast(prefix_len - 1));
+    const mask = (@as(u64, 1) << prefix_len) - 1;
     var value = @as(T, first_byte) & mask;
     if (value < mask) {
         return value;
     }
-    var shift: u8 = 0;
+    var shift: u6 = prefix_len;
     while (true) {
         const byte = try reader.readByte();
         value += @as(T, byte & 0x7F) << shift;

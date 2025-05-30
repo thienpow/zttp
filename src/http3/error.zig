@@ -56,4 +56,8 @@ pub const Http3Error = error{
     QpackStreamError,
     InvalidStreamState,
     UnknownStream,
+    FrameError,
+    FrameUnexpected,
+    InvalidVli,
+    InvalidHuffmanCode,
 };

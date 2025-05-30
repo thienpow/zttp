@@ -2,8 +2,9 @@
 set -e
 
 # Configuration
-ZIG_VERSION="0.15.0-dev.552+bc2f7c754"
-ZIG_URL="https://ziglang.org/builds/zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+# https://ziglang.org/builds/zig-x86_64-linux-0.15.0-dev.643+dc6ffc28b.tar.xz
+ZIG_VERSION="0.15.0-dev.643+dc6ffc28b"
+ZIG_URL="https://ziglang.org/builds/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
 INSTALL_DIR="/usr/local/zig"  # Installation directory
 BIN_LINK="/usr/local/bin/zig"  # Symlink location
 
@@ -28,13 +29,13 @@ cd "$TMP_DIR"
 
 # Download Zig
 echo -e "${YELLOW}Downloading Zig...${NC}"
-wget "$ZIG_URL" -O "zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
+wget "$ZIG_URL" -O "zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
 
 # Extract archive
 echo -e "${YELLOW}Extracting...${NC}"
 mkdir -p "$INSTALL_DIR"
-tar -xf "zig-linux-x86_64-${ZIG_VERSION}.tar.xz"
-cp -r "zig-linux-x86_64-${ZIG_VERSION}/"* "$INSTALL_DIR/"
+tar -xf "zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+cp -r "zig-x86_64-linux-${ZIG_VERSION}/"* "$INSTALL_DIR/"
 
 # Create symlink
 echo -e "${YELLOW}Creating symlink...${NC}"

@@ -69,7 +69,7 @@ pub const QpackDecoder = struct {
     pub fn decodeHeaders(self: *QpackDecoder, stream_id: u64, header_block: []const u8) !HeaderMap {
         log.debug("Decoding header block for stream {d} (len={d})", .{ stream_id, header_block.len });
         var headers = HeaderMap.init(self.allocator);
-        errdefer headers.deinit();
+        errdefer (&headers).deinit();
         var stream = std.io.fixedBufferStream(header_block);
         var reader = stream.reader();
 
@@ -198,13 +198,13 @@ pub const QpackDecoder = struct {
             _ = self.blocked_streams.swapRemove(i);
             // Placeholder: Dispatch to stream.zig
             // try self.connection.dispatchHeaders(blocked.stream_id, headers);
-            headers.deinit();
+            (&headers).deinit();
         }
     }
 
     fn getTableEntry(self: *QpackDecoder, is_static: bool, index: u64) !DynamicTableEntry {
         if (is_static) {
-            return static_table.getEntry(index) catch return Http3Error.QpackDecompressionFailed;
+            return static_table.StaticTable.getEntry(index) catch return Http3Error.QpackDecompressionFailed;
         }
         return self.getDynamicTableEntry(index);
     }
@@ -218,8 +218,8 @@ pub const QpackDecoder = struct {
 
     fn insertDynamicTableEntry(self: *QpackDecoder, name: []const u8, value: []const u8) !void {
         const entry_size = name.len + value.len + 32;
-        while (self.dynamic_table_size + entry_size > self.max_table_capacity and !self.dynamic_table.isEmpty()) {
-            const oldest = self.dynamic_table.pop();
+        while (self.dynamic_table_size + entry_size > self.max_table_capacity and self.dynamic_table.items.len > 0) {
+            const oldest = self.dynamic_table.pop().?;
             self.dynamic_table_size -= oldest.name.len + oldest.value.len + 32;
             self.allocator.free(oldest.name);
             self.allocator.free(oldest.value);
@@ -237,8 +237,8 @@ pub const QpackDecoder = struct {
     }
 
     fn setDynamicTableCapacity(self: *QpackDecoder, capacity: u64) !void {
-        while (self.dynamic_table_size > capacity and !self.dynamic_table.isEmpty()) {
-            const oldest = self.dynamic_table.pop();
+        while (self.dynamic_table_size > capacity and self.dynamic_table.items.len > 0) {
+            const oldest = self.dynamic_table.pop().?;
             self.dynamic_table_size -= oldest.name.len + oldest.value.len + 32;
             self.allocator.free(oldest.name);
             self.allocator.free(oldest.value);
@@ -252,7 +252,7 @@ pub const QpackDecoder = struct {
         const is_huffman = first_byte & 0x08 != 0;
         const length = if (is_huffman) first_byte & 0x07 else first_byte;
         if (is_huffman) {
-            return try huffman.decodeHuffman(reader, self.allocator, length);
+            return try huffman.decodeHuffman(reader, self.allocator);
         }
         const buf = try self.allocator.alloc(u8, length);
         errdefer self.allocator.free(buf);

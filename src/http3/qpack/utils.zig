@@ -22,7 +22,7 @@ pub fn readInt(reader: anytype, comptime T: type, prefix_len: u6) !T {
     const mask = (@as(T, 1) << prefix_len) - 1;
     var value = @as(T, first_byte) & mask;
     if (value < mask) return value;
-    var shift: u8 = prefix_len;
+    var shift: u6 = prefix_len;
     while (true) {
         const byte = try reader.readByte();
         value += @as(T, byte & 0x7F) << shift;

@@ -111,7 +111,7 @@ pub fn readFrame(allocator: Allocator, reader: anytype) !Frame {
             allocator.free(payload);
             return Frame{ .webtransport_stream = .{} };
         },
-        else => return Frame{ .reserved = .{ .payload = payload } },
+        else => return Frame{ .reserved = .{ .frame_type = frame_type_val, .payload = payload } },
     }
 }
 
@@ -148,6 +148,13 @@ pub fn writeFrame(allocator: Allocator, writer: anytype, frame: Frame) !void {
             payload_slice = payload.items;
         },
         .webtransport_stream => {},
+        .priority => |f| { payload_slice = &.{ (@as(u8, if (f.incremental) 1 else 0)) << 7 | f.urgency }; },
+        .push_promise => |f| { try varint.encode(f.push_id, &payload); try payload.appendSlice(f.encoded_headers); payload_slice = payload.items; },
+        .ping => |f| { payload_slice = f.opaque_data[0..]; },
+        .window_update => |f| { try varint.encode(f.window_size_increment, &payload); payload_slice = payload.items; },
+        .continuation => |f| { payload_slice = f.encoded_block; },
+        .webtransport_bi => |f| { try varint.encode(f.session_id, &payload); payload_slice = payload.items; },
+        .webtransport_uni => |f| { try varint.encode(f.session_id, &payload); payload_slice = payload.items; },
         .reserved => |f| payload_slice = f.payload,
     }
 

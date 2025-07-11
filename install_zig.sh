@@ -2,8 +2,8 @@
 set -e
 
 # Configuration
-# https://ziglang.org/builds/zig-x86_64-linux-0.15.0-dev.643+dc6ffc28b.tar.xz
-ZIG_VERSION="0.15.0-dev.643+dc6ffc28b"
+# https://ziglang.org/builds/zig-x86_64-linux-0.15.0-dev.936+fc2c1883b.tar.xz
+ZIG_VERSION="0.15.0-dev.936+fc2c1883b"
 ZIG_URL="https://ziglang.org/builds/zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
 INSTALL_DIR="/usr/local/zig"  # Installation directory
 BIN_LINK="/usr/local/bin/zig"  # Symlink location
